@@ -20,22 +20,23 @@ import (
 
 // mockSourceResolver is a test source resolver.
 type mockSourceResolver struct {
-	sources map[string]source.ResolvedSource
-	skipped map[string]*source.SkippedError
-	err     error
+	sources  map[string]source.ResolvedSource
+	excluded map[string]bool
+	missing  map[string]bool
+	err      error
 }
 
 func (m *mockSourceResolver) Resolve(ctx context.Context, pkg string) (source.ResolvedSource, error) {
 	if m.err != nil {
 		return source.ResolvedSource{}, m.err
 	}
-	if skipped, ok := m.skipped[pkg]; ok {
-		return source.ResolvedSource{}, skipped
+	if m.excluded[pkg] {
+		return source.ResolvedSource{}, source.ErrExcluded
 	}
 	if src, ok := m.sources[pkg]; ok {
 		return src, nil
 	}
-	return source.ResolvedSource{}, &source.SkippedError{Package: pkg, Reason: "package not found in any configured source"}
+	return source.ResolvedSource{}, source.ErrNotFound
 }
 
 // mockDirSyncer copies srcDir to dstDir for tests.
@@ -144,18 +145,14 @@ type mockGit struct {
 	commits           []string
 	pushes            []string
 	staged            []string
-	remoteBranches    map[string]bool
-	changes           []git.Change
 	hasChanges        bool
 	checkoutErr       error
 	resetErr          error
 	createBranchErr   error
 	stageErr          error
 	hasStagedErr      error
-	stagedChangesErr  error
 	commitErr         error
 	pushErr           error
-	remoteBranchErr   error
 	resetFailAfter    int
 	resetCallCount    int
 	checkoutFailAfter int
@@ -177,10 +174,6 @@ func (m *mockGit) Stage(repoDir string, paths ...string) error {
 
 func (m *mockGit) HasStagedChanges(repoDir string, paths ...string) (bool, error) {
 	return m.hasChanges, m.hasStagedErr
-}
-
-func (m *mockGit) StagedChanges(repoDir string, paths ...string) ([]git.Change, error) {
-	return m.changes, m.stagedChangesErr
 }
 
 func (m *mockGit) Commit(repoDir, message string) error {
@@ -217,13 +210,6 @@ func (m *mockGit) ResetHard(repoDir string) error {
 	return nil
 }
 
-func (m *mockGit) RemoteBranchExists(repoDir, remote, branch string) (bool, error) {
-	if m.remoteBranchErr != nil {
-		return false, m.remoteBranchErr
-	}
-	return m.remoteBranches[branch], nil
-}
-
 func testConfig(g GitDriver, pr PRClient, src SourceResolver, sync DirSyncer, runner CommandRunner) RunConfig {
 	return RunConfig{
 		SourceResolver: src,
@@ -248,9 +234,7 @@ func TestRun_MissingSourceSkip(t *testing.T) {
 	g := &mockGit{}
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
-		skipped: map[string]*source.SkippedError{
-			"cat/foo": {Package: "cat/foo", Reason: "package not found in any configured source"},
-		},
+		missing: map[string]bool{"cat/foo": true},
 	}, &mockDirSyncer{}, &mockCommandRunner{})
 
 	pkgs := []discovery.Package{{ID: "cat/foo", Category: "cat", Name: "foo", Path: "/repo/cat/foo"}}
@@ -260,20 +244,43 @@ func TestRun_MissingSourceSkip(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(summary.MissingSource) != 1 || summary.MissingSource[0] != "cat/foo" {
-		t.Fatalf("expected missing source, got %v", summary.MissingSource)
-	}
 	if len(summary.Created) != 0 || len(summary.Failures) != 0 {
 		t.Fatalf("expected no PRs or failures, got PRs=%v failures=%v", summary.Created, summary.Failures)
 	}
 	if len(g.branches) != 0 {
 		t.Fatalf("expected no local branch created for missing source, got %v", g.branches)
 	}
+	if !strings.Contains(out.String(), "skip cat/foo") {
+		t.Fatalf("output should report skip, got:\n%s", out.String())
+	}
+}
+
+func TestRun_ExcludedSkip(t *testing.T) {
+	g := &mockGit{}
+	pr := &mockPRClient{}
+	cfg := testConfig(g, pr, &mockSourceResolver{
+		excluded: map[string]bool{"cat/foo": true},
+	}, &mockDirSyncer{}, &mockCommandRunner{})
+
+	pkgs := []discovery.Package{{ID: "cat/foo", Category: "cat", Name: "foo", Path: "/repo/cat/foo"}}
+	var out strings.Builder
+	summary, err := Run(context.Background(), cfg, pkgs, &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(summary.Created) != 0 || len(summary.Failures) != 0 {
+		t.Fatalf("expected no PRs or failures, got PRs=%v failures=%v", summary.Created, summary.Failures)
+	}
+	if !strings.Contains(out.String(), "skip cat/foo") {
+		t.Fatalf("output should report skip, got:\n%s", out.String())
+	}
 }
 
 func TestRun_DuplicateRemoteBranch(t *testing.T) {
 	g := &mockGit{
-		remoteBranches: map[string]bool{"update/cat-foo/abc123": true},
+		hasChanges: true,
+		pushErr:    errors.New("remote rejected: already exists"),
 	}
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
@@ -289,27 +296,28 @@ func TestRun_DuplicateRemoteBranch(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(summary.AlreadyCovered) != 1 || summary.AlreadyCovered[0] != "cat/foo" {
-		t.Fatalf("expected already covered, got %v", summary.AlreadyCovered)
+	if len(summary.Created) != 0 || len(summary.Failures) != 0 {
+		t.Fatalf("expected no PRs or failures, got PRs=%v failures=%v", summary.Created, summary.Failures)
 	}
-	if len(g.branches) != 0 || len(g.commits) != 0 || len(g.pushes) != 0 {
-		t.Fatalf("expected no branch/commit/push for duplicate, branches=%v commits=%v pushes=%v", g.branches, g.commits, g.pushes)
+	if len(g.branches) != 1 {
+		t.Fatalf("expected branch creation attempt, got %v", g.branches)
+	}
+	if len(g.pushes) != 1 {
+		t.Fatalf("expected push attempt, got %v", g.pushes)
 	}
 	if len(pr.calls) != 0 {
 		t.Fatalf("expected no PR for duplicate branch, got %v", pr.calls)
 	}
-	if !strings.Contains(out.String(), "already exists") {
+	if !strings.Contains(out.String(), "skip cat/foo") {
 		t.Fatalf("output should report duplicate branch skip, got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "already exists") {
+		t.Fatalf("output should mention already exists, got:\n%s", out.String())
 	}
 }
 
 func TestRun_CreatesPRWithChanges(t *testing.T) {
-	changes := []git.Change{
-		{Path: "cat/foo/foo.ebuild", Status: git.Modified},
-		{Path: "cat/foo/files/fix.patch", Status: git.Deleted},
-		{Path: "cat/foo/new.file", Status: git.Added},
-	}
-	g := &mockGit{hasChanges: true, changes: changes}
+	g := &mockGit{hasChanges: true}
 	pr := &mockPRClient{url: "https://github.com/owner/repo/pull/42"}
 	runner := &mockCommandRunner{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
@@ -365,7 +373,7 @@ func TestRun_CreatesPRWithChanges(t *testing.T) {
 	if prCall.Head != wantBranch || prCall.Base != "main" {
 		t.Fatalf("unexpected PR head/base: %q/%q", prCall.Head, prCall.Base)
 	}
-	for _, want := range []string{"guru", "https://guru", "deadbeef1234", wantBranch, "modified: `foo.ebuild`", "deleted: `files/fix.patch`", "added: `new.file`"} {
+	for _, want := range []string{"guru", "https://guru", "deadbeef1234"} {
 		if !strings.Contains(prCall.Body, want) {
 			t.Fatalf("PR body missing %q:\n%s", want, prCall.Body)
 		}
@@ -388,22 +396,19 @@ func TestRun_NoPRWhenNoDiff(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(summary.UpToDate) != 1 || summary.UpToDate[0] != "cat/foo" {
-		t.Fatalf("expected up to date, got %v", summary.UpToDate)
-	}
 	if len(summary.Created) != 0 || len(summary.Failures) != 0 {
 		t.Fatalf("expected no PRs or failures, got %v %v", summary.Created, summary.Failures)
 	}
 	if len(g.commits) != 0 || len(g.pushes) != 0 || len(pr.calls) != 0 {
 		t.Fatalf("expected no commit/push/PR for up-to-date package")
 	}
-	if !strings.Contains(out.String(), "up to date") {
+	if !strings.Contains(out.String(), "skip cat/foo: up to date") {
 		t.Fatalf("output should say up to date, got:\n%s", out.String())
 	}
 }
 
 func TestRun_ManifestFailureBlocksPR(t *testing.T) {
-	g := &mockGit{hasChanges: true, changes: []git.Change{{Path: "cat/foo/foo.ebuild", Status: git.Modified}}}
+	g := &mockGit{hasChanges: true}
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
@@ -428,7 +433,7 @@ func TestRun_ManifestFailureBlocksPR(t *testing.T) {
 }
 
 func TestRun_PkgcheckFailureBlocksPR(t *testing.T) {
-	g := &mockGit{hasChanges: true, changes: []git.Change{{Path: "cat/foo/foo.ebuild", Status: git.Modified}}}
+	g := &mockGit{hasChanges: true}
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
@@ -450,8 +455,7 @@ func TestRun_PkgcheckFailureBlocksPR(t *testing.T) {
 }
 
 func TestRun_AggregateFailureContinues(t *testing.T) {
-	changes := []git.Change{{Path: "cat/bar/bar.ebuild", Status: git.Modified}}
-	g := &mockGit{hasChanges: true, changes: changes}
+	g := &mockGit{hasChanges: true}
 	pr := &mockPRClient{}
 	src := &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
@@ -475,30 +479,6 @@ func TestRun_AggregateFailureContinues(t *testing.T) {
 	}
 	if len(summary.Failures) != 1 || summary.Failures[0].Package != "cat/foo" {
 		t.Fatalf("expected failure for cat/foo, got %v", summary.Failures)
-	}
-}
-
-func TestRun_AlreadyCoveredSummary(t *testing.T) {
-	g := &mockGit{remoteBranches: map[string]bool{"update/cat-foo/abc123": true}}
-	pr := &mockPRClient{}
-	cfg := testConfig(g, pr, &mockSourceResolver{
-		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
-		},
-	}, &mockDirSyncer{}, &mockCommandRunner{})
-
-	pkgs := []discovery.Package{{ID: "cat/foo", Category: "cat", Name: "foo", Path: "/repo/cat/foo"}}
-	var out strings.Builder
-	summary, err := Run(context.Background(), cfg, pkgs, &out)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(summary.AlreadyCovered) != 1 {
-		t.Fatalf("expected already covered, got %v", summary.AlreadyCovered)
-	}
-	if !strings.Contains(out.String(), "Already covered by existing update branches") {
-		t.Fatalf("summary should report already covered, got:\n%s", out.String())
 	}
 }
 
@@ -542,7 +522,6 @@ func TestRun_CleanupFailure(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := &mockGit{
 				hasChanges:     true,
-				changes:        []git.Change{{Path: "cat/foo/foo.ebuild", Status: git.Modified}},
 				resetFailAfter: 1,
 			}
 			pr := &mockPRClient{url: "https://github.com/owner/repo/pull/42"}
@@ -666,8 +645,8 @@ func TestRun_CleanupIsolation(t *testing.T) {
 	testutil.RunGit(t, tmp, "add", ".")
 	testutil.RunGit(t, tmp, "commit", "-m", "add packages", "--quiet")
 
-	// Provide an origin remote so RemoteBranchExists can query it without
-	// contacting the network. The bare repo starts with no branches.
+	// Provide an origin remote so pushes can be recorded without contacting the
+	// network. The bare repo starts with no branches.
 	origin := t.TempDir()
 	testutil.RunGit(t, origin, "init", "--bare", "--quiet")
 	testutil.RunGit(t, tmp, "remote", "add", "origin", origin)

@@ -3,25 +3,18 @@ package main
 import (
 	"context"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/s3-odara/gentoo-overlay/internal/updater"
 )
 
 func TestParseArgs(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
-		cfg, root, base, help, err := parseArgs(nil, io.Discard)
+		root, base, help, err := parseArgs(nil, io.Discard)
 		if err != nil {
 			t.Fatalf("parseArgs: %v", err)
 		}
 		if help {
 			t.Fatal("unexpected help request")
-		}
-		if cfg != defaultConfig {
-			t.Fatalf("config path: got %q, want %q", cfg, defaultConfig)
 		}
 		if root != "." {
 			t.Fatalf("root: got %q, want %q", root, ".")
@@ -32,8 +25,7 @@ func TestParseArgs(t *testing.T) {
 	})
 
 	t.Run("overrides", func(t *testing.T) {
-		cfg, root, base, help, err := parseArgs([]string{
-			"-config", "custom.json",
+		root, base, help, err := parseArgs([]string{
 			"-root", "/tmp/overlay",
 			"-base-branch", "dev",
 		}, io.Discard)
@@ -43,13 +35,13 @@ func TestParseArgs(t *testing.T) {
 		if help {
 			t.Fatal("unexpected help request")
 		}
-		if cfg != "custom.json" || root != "/tmp/overlay" || base != "dev" {
-			t.Fatalf("unexpected flags: config=%q root=%q base=%q", cfg, root, base)
+		if root != "/tmp/overlay" || base != "dev" {
+			t.Fatalf("unexpected flags: root=%q base=%q", root, base)
 		}
 	})
 
 	t.Run("rejects positional arguments", func(t *testing.T) {
-		_, _, _, _, err := parseArgs([]string{"extra"}, io.Discard)
+		_, _, _, err := parseArgs([]string{"extra"}, io.Discard)
 		if err == nil {
 			t.Fatal("expected error for positional argument")
 		}
@@ -60,7 +52,7 @@ func TestParseArgs(t *testing.T) {
 
 	t.Run("help is not an error", func(t *testing.T) {
 		var buf strings.Builder
-		cfg, root, base, help, err := parseArgs([]string{"-help"}, &buf)
+		root, base, help, err := parseArgs([]string{"-help"}, &buf)
 		if err != nil {
 			t.Fatalf("parseArgs -help: %v", err)
 		}
@@ -69,8 +61,8 @@ func TestParseArgs(t *testing.T) {
 		}
 		// The default values are returned so run can exit cleanly after printing
 		// usage, but the caller is expected to stop processing on help.
-		if cfg != defaultConfig || root != "." || base != "" {
-			t.Fatalf("unexpected flag values after help: %q %q %q", cfg, root, base)
+		if root != "." || base != "" {
+			t.Fatalf("unexpected flag values after help: %q %q", root, base)
 		}
 		if !strings.Contains(buf.String(), "Usage") {
 			t.Fatalf("help output missing usage: %q", buf.String())
@@ -149,27 +141,5 @@ func TestRun_Help(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Usage") {
 		t.Fatalf("help output missing usage: %q", buf.String())
-	}
-}
-
-func TestWriteSummary(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "summary.md")
-	summary := &updater.RunSummary{
-		Created: []updater.PRCreated{
-			{Package: "app-misc/lf", Branch: "update/app-misc-lf/abc123", URL: "https://example.com/pr/1", Source: "guru"},
-		},
-	}
-	if err := writeSummary(summary, path); err != nil {
-		t.Fatalf("writeSummary: %v", err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read summary: %v", err)
-	}
-	if !strings.Contains(string(data), "app-misc/lf") {
-		t.Fatalf("summary missing package: %s", data)
-	}
-	if !strings.Contains(string(data), "Created pull requests") {
-		t.Fatalf("summary missing header: %s", data)
 	}
 }

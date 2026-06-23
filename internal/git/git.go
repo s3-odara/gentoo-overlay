@@ -6,21 +6,6 @@ import (
 	"strings"
 )
 
-// ChangeStatus describes how git reports a path in a diff.
-type ChangeStatus string
-
-const (
-	Added    ChangeStatus = "added"
-	Modified ChangeStatus = "modified"
-	Deleted  ChangeStatus = "deleted"
-)
-
-// Change records one changed path from git diff.
-type Change struct {
-	Path   string
-	Status ChangeStatus
-}
-
 // ExecDriver shells out to git for production updater runs.
 type ExecDriver struct{}
 
@@ -53,16 +38,6 @@ func (e *ExecDriver) HasStagedChanges(repoDir string, paths ...string) (bool, er
 		return true, nil
 	}
 	return false, fmt.Errorf("check staged diff: %w\n%s", err, strings.TrimSpace(string(out)))
-}
-
-func (e *ExecDriver) StagedChanges(repoDir string, paths ...string) ([]Change, error) {
-	args := []string{"-C", repoDir, "diff", "--cached", "--name-status", "--"}
-	args = append(args, paths...)
-	out, err := exec.Command("git", args...).CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("list staged changes: %w\n%s", err, strings.TrimSpace(string(out)))
-	}
-	return parseNameStatus(string(out)), nil
 }
 
 func (e *ExecDriver) Commit(repoDir, message string) error {
@@ -119,57 +94,4 @@ func ResolveHead(repoDir string) (string, error) {
 		return "", fmt.Errorf("resolve HEAD in %q: %w\n%s", repoDir, err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
-}
-
-// RemoteBranchExists reports whether the named branch exists on the given
-// remote. git ls-remote returns exit code 2 when no matching refs are found,
-// which is treated as "does not exist". Any other failure (e.g. the remote is
-// unreachable) is returned as an error so the caller does not silently skip
-// updates because of a configuration problem.
-func (e *ExecDriver) RemoteBranchExists(repoDir, remote, branch string) (bool, error) {
-	ref := fmt.Sprintf("refs/heads/%s", branch)
-	out, err := exec.Command("git", "-C", repoDir, "ls-remote", "--exit-code", "--heads", remote, ref).CombinedOutput()
-	if err == nil {
-		return true, nil
-	}
-	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 2 {
-		return false, nil
-	}
-	return false, fmt.Errorf("check remote branch %q on %q: %w\n%s", branch, remote, err, strings.TrimSpace(string(out)))
-}
-
-func parseNameStatus(output string) []Change {
-	var changes []Change
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		if line == "" {
-			continue
-		}
-		fields := strings.Split(line, "\t")
-		if len(fields) < 2 {
-			continue
-		}
-		status := statusFromGit(fields[0])
-		if status == "" {
-			continue
-		}
-		path := fields[len(fields)-1]
-		changes = append(changes, Change{Path: path, Status: status})
-	}
-	return changes
-}
-
-func statusFromGit(status string) ChangeStatus {
-	if status == "" {
-		return ""
-	}
-	switch status[0] {
-	case 'A':
-		return Added
-	case 'M', 'T', 'R', 'C':
-		return Modified
-	case 'D':
-		return Deleted
-	default:
-		return ""
-	}
 }

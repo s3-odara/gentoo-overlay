@@ -106,13 +106,6 @@ func TestExecDriver_StageAndCommit(t *testing.T) {
 	if !changed {
 		t.Fatal("expected staged changes")
 	}
-	changes, err := d.StagedChanges(dir, "gui-apps/fuzzel")
-	if err != nil {
-		t.Fatalf("StagedChanges failed: %v", err)
-	}
-	if len(changes) != 1 || changes[0].Status != Added || changes[0].Path != "gui-apps/fuzzel/fuzzel-1.0.ebuild" {
-		t.Fatalf("unexpected staged changes: %+v", changes)
-	}
 	if err := d.Commit(dir, "sync gui-apps/fuzzel"); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
@@ -234,48 +227,5 @@ func TestExecDriver_ResolveHead(t *testing.T) {
 	}
 	if !strings.HasPrefix(strings.TrimSpace(string(full)), sha) {
 		t.Fatalf("short SHA %q is not a prefix of HEAD %q", sha, strings.TrimSpace(string(full)))
-	}
-}
-
-func TestExecDriver_RemoteBranchExists(t *testing.T) {
-	local := initRepo(t)
-	remote := t.TempDir()
-	runGit(t, remote, "init", "--bare", "--quiet")
-	runGit(t, local, "remote", "add", "origin", remote)
-	runGit(t, local, "push", "origin", "main")
-
-	d := &ExecDriver{}
-	exists, err := d.RemoteBranchExists(local, "origin", "main")
-	if err != nil {
-		t.Fatalf("RemoteBranchExists failed: %v", err)
-	}
-	if !exists {
-		t.Fatal("expected main branch to exist on origin")
-	}
-
-	missing, err := d.RemoteBranchExists(local, "origin", "no-such-branch")
-	if err != nil {
-		t.Fatalf("RemoteBranchExists failed: %v", err)
-	}
-	if missing {
-		t.Fatal("expected missing branch to not exist")
-	}
-}
-
-func TestParseNameStatus(t *testing.T) {
-	changes := parseNameStatus("A\tnew\nM\tchanged\nD\told\nR100\tbefore\tafter\n")
-	want := []Change{
-		{Path: "new", Status: Added},
-		{Path: "changed", Status: Modified},
-		{Path: "old", Status: Deleted},
-		{Path: "after", Status: Modified},
-	}
-	if len(changes) != len(want) {
-		t.Fatalf("got %+v, want %+v", changes, want)
-	}
-	for i := range want {
-		if changes[i] != want[i] {
-			t.Fatalf("change %d: got %+v, want %+v", i, changes[i], want[i])
-		}
 	}
 }

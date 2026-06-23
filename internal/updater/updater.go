@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/s3-odara/gentoo-overlay/internal/discovery"
-	"github.com/s3-odara/gentoo-overlay/internal/git"
 	"github.com/s3-odara/gentoo-overlay/internal/github"
 	"github.com/s3-odara/gentoo-overlay/internal/source"
 )
@@ -21,12 +20,10 @@ type GitDriver interface {
 	CreateBranch(repoDir, branch, base string) error
 	Stage(repoDir string, paths ...string) error
 	HasStagedChanges(repoDir string, paths ...string) (bool, error)
-	StagedChanges(repoDir string, paths ...string) ([]git.Change, error)
 	Commit(repoDir, message string) error
 	Push(repoDir, remote, branch string) error
 	Checkout(repoDir, branch string) error
 	ResetHard(repoDir string) error
-	RemoteBranchExists(repoDir, remote, branch string) (bool, error)
 }
 
 // PRClient creates pull requests. The production implementation is
@@ -87,12 +84,8 @@ type Failure struct {
 
 // RunSummary records the result of an updater run.
 type RunSummary struct {
-	Created        []PRCreated
-	MissingSource  []string
-	Excluded       []string
-	AlreadyCovered []string
-	UpToDate       []string
-	Failures       []Failure
+	Created  []PRCreated
+	Failures []Failure
 }
 
 // HasFailures reports whether any package failed a gate or API call.
@@ -148,8 +141,8 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 
 	src, err := cfg.SourceResolver.Resolve(ctx, pkg.ID)
 	if err != nil {
-		if skipped, ok := err.(*source.SkippedError); ok {
-			recordSkip(summary, skipped)
+		if errors.Is(err, source.ErrExcluded) || errors.Is(err, source.ErrNotFound) {
+			fmt.Fprintf(out, "skip %s: %v\n", pkg.ID, err)
 			return nil
 		}
 		recordFailure(summary, pkg.ID, "source", err)
@@ -157,20 +150,6 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 	}
 
 	branch := branchName(cfg.BranchPrefix, pkg, src.SHA)
-
-	// Duplicate detection happens before any local branch or file changes so
-	// that an existing update branch for the same upstream state prevents
-	// redundant work without leaving the repository on a feature branch.
-	exists, err := cfg.Git.RemoteBranchExists(cfg.RootDir, "origin", branch)
-	if err != nil {
-		recordFailure(summary, pkg.ID, "git-remote", err)
-		return nil
-	}
-	if exists {
-		fmt.Fprintf(out, "  %s: update branch %s already exists; skipping duplicate\n", pkg.ID, branch)
-		summary.AlreadyCovered = append(summary.AlreadyCovered, pkg.ID)
-		return nil
-	}
 
 	// Mutation begins here. Register the cleanup guard before the first
 	// worktree-mutating operation so that even a preparatory checkout/reset
@@ -237,22 +216,11 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 		return nil
 	}
 	if !changed {
-		fmt.Fprintf(out, "  %s: up to date\n", pkg.ID)
-		summary.UpToDate = append(summary.UpToDate, pkg.ID)
+		fmt.Fprintf(out, "skip %s: up to date\n", pkg.ID)
 		return nil
 	}
 
-	changes, err := cfg.Git.StagedChanges(cfg.RootDir, pkgRelPath)
-	if err != nil {
-		recordFailure(summary, pkg.ID, "git-diff", err)
-		return nil
-	}
-	changes = stripPackagePrefix(pkgRelPath, changes)
-
-	fmt.Fprintf(out, "  %s: %d change(s) detected\n", pkg.ID, len(changes))
-	for _, c := range changes {
-		fmt.Fprintf(out, "    %s %s\n", c.Status, c.Path)
-	}
+	fmt.Fprintf(out, "  %s: changes detected\n", pkg.ID)
 
 	if err := cfg.Git.Commit(cfg.RootDir, commitMessage(pkg, src)); err != nil {
 		recordFailure(summary, pkg.ID, "git-commit", err)
@@ -260,6 +228,11 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 	}
 
 	if err := cfg.Git.Push(cfg.RootDir, "origin", branch); err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "already exists") || strings.Contains(msg, "rejected") {
+			fmt.Fprintf(out, "skip %s: %v\n", pkg.ID, err)
+			return nil
+		}
 		recordFailure(summary, pkg.ID, "git-push", err)
 		return nil
 	}
@@ -268,7 +241,7 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 		Title: prTitle(pkg, src),
 		Head:  branch,
 		Base:  cfg.BaseBranch,
-		Body:  BuildPRBody(pkg, src, branch, changes),
+		Body:  BuildPRBody(pkg, src),
 	}
 	url, err := cfg.PRClient.CreatePullRequest(ctx, cfg.Owner, cfg.Repo, pr)
 	if err != nil {
@@ -284,14 +257,6 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 		Source:  src.Name,
 	})
 	return nil
-}
-
-func recordSkip(summary *RunSummary, skipped *source.SkippedError) {
-	if strings.Contains(skipped.Reason, "excluded") {
-		summary.Excluded = append(summary.Excluded, skipped.Package)
-		return
-	}
-	summary.MissingSource = append(summary.MissingSource, skipped.Package)
 }
 
 func recordFailure(summary *RunSummary, pkg, phase string, err error) error {
