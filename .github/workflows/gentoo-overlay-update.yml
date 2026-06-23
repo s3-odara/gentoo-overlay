@@ -38,7 +38,7 @@ jobs:
             dev-util/pkgdev \
             dev-util/pkgcheck
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history avoids subtle git-origin issues for pkgcheck.
           fetch-depth: 0
