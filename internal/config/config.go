@@ -16,6 +16,11 @@ import (
 // reject obvious mistakes rather than duplicate Portage naming policy.
 var packageIDRe = regexp.MustCompile(`^[a-z0-9+_.-]+/[a-zA-Z0-9+_.-]+$`)
 
+// ValidPackageID reports whether id is a syntactically valid category/package.
+func ValidPackageID(id string) bool {
+	return packageIDRe.MatchString(id)
+}
+
 // ErrPackageExcluded is returned by ResolveSource when the package is excluded
 // from automatic updates.
 var ErrPackageExcluded = errors.New("package is excluded")
@@ -113,13 +118,13 @@ func (c *Config) Validate() error {
 	}
 
 	for _, pkg := range c.Exclusions {
-		if !packageIDRe.MatchString(pkg) {
+		if !ValidPackageID(pkg) {
 			return fmt.Errorf("invalid exclusion package id %q", pkg)
 		}
 	}
 
 	for pkg, o := range c.Overrides {
-		if !packageIDRe.MatchString(pkg) {
+		if !ValidPackageID(pkg) {
 			return fmt.Errorf("invalid override package id %q", pkg)
 		}
 		if o.Source != nil && strings.TrimSpace(*o.Source) == "" {
@@ -151,12 +156,6 @@ func (c *Config) IsExcluded(pkg string) bool {
 		}
 	}
 	return false
-}
-
-// OverrideFor returns the override for pkg, if any.
-func (c *Config) OverrideFor(pkg string) (Override, bool) {
-	o, ok := c.Overrides[pkg]
-	return o, ok
 }
 
 // SourceByName returns the configured source with the given name.

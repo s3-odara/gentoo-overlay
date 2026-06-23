@@ -107,6 +107,13 @@ func (e *ExecDriver) ResetHard(repoDir string) error {
 // repository at repoDir. It is used to fingerprint the upstream revision so the
 // updater can name PR branches deterministically and avoid duplicate proposals.
 func (e *ExecDriver) ResolveHead(repoDir string) (string, error) {
+	return ResolveHead(repoDir)
+}
+
+// ResolveHead returns the short (12 character) SHA of the current HEAD of the
+// repository at repoDir. The package-level helper lets other packages resolve
+// HEAD without depending on the full ExecDriver.
+func ResolveHead(repoDir string) (string, error) {
 	out, err := exec.Command("git", "-C", repoDir, "rev-parse", "--short=12", "HEAD").CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("resolve HEAD in %q: %w\n%s", repoDir, err, strings.TrimSpace(string(out)))

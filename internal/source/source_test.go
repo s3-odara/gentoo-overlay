@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/s3-odara/gentoo-overlay/internal/config"
+	"github.com/s3-odara/gentoo-overlay/internal/testutil"
 )
 
 func TestResolve_GuruPriorityWins(t *testing.T) {
@@ -300,37 +300,6 @@ func TestResolve_SourceOverrideMissing(t *testing.T) {
 	}
 }
 
-func TestInitialize_ClonesAllSources(t *testing.T) {
-	fixtures := t.TempDir()
-	guru := makeSourceFixture(t, fixtures, "guru", "master", map[string]string{
-		"app-misc/lf/lf-41.ebuild": "EAPI=8\n",
-	})
-	zh := makeSourceFixture(t, fixtures, "gentoo-zh", "master", map[string]string{
-		"app-i18n/cskk/cskk-3.3.0.ebuild": "EAPI=8\n",
-	})
-
-	cfg := &config.Config{
-		Sources: []config.Source{
-			{Name: "guru", URL: guru, Ref: "master"},
-			{Name: "gentoo-zh", URL: zh, Ref: "master"},
-		},
-		BranchPrefix: "update",
-	}
-
-	cloner := &fakeCloner{fixtures: map[string]string{
-		"guru/master":      guru,
-		"gentoo-zh/master": zh,
-	}}
-	mgr := NewManager(cfg, cloner, t.TempDir())
-
-	if err := mgr.Initialize(context.Background()); err != nil {
-		t.Fatalf("Initialize failed: %v", err)
-	}
-	if _, err := mgr.Resolve(context.Background(), "app-misc/lf"); err != nil {
-		t.Fatalf("Resolve after Initialize failed: %v", err)
-	}
-}
-
 type fakeCloner struct {
 	fixtures map[string]string // "name/ref" -> fixture directory
 }
@@ -341,7 +310,7 @@ func (f *fakeCloner) Clone(ctx context.Context, source config.Source, dst string
 	if !ok {
 		return fmt.Errorf("no fixture for %s", key)
 	}
-	return copyDir(src, dst)
+	return testutil.CopyDir(src, dst)
 }
 
 // fakeClonerWithFailures wraps fakeCloner and returns injected errors for
@@ -363,52 +332,17 @@ func (f *fakeClonerWithFailures) Clone(ctx context.Context, source config.Source
 func makeSourceFixture(t *testing.T, root, name, ref string, files map[string]string) string {
 	t.Helper()
 	dir := filepath.Join(root, name, ref)
-	writeDir(t, dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %q: %v", dir, err)
+	}
 	// Every fixture must have at least one tracked file so git can create a
 	// commit and resolve a HEAD SHA.
-	writeFile(t, filepath.Join(dir, ".gitkeep"), "")
+	testutil.WriteFile(t, filepath.Join(dir, ".gitkeep"), "")
 	for path, content := range files {
-		writeFile(t, filepath.Join(dir, path), content)
+		testutil.WriteFile(t, filepath.Join(dir, path), content)
 	}
-	initGitRepo(t, dir)
+	testutil.InitGitRepo(t, dir)
 	return dir
-}
-
-func initGitRepo(t *testing.T, dir string) {
-	t.Helper()
-	runGit(t, dir, "init", "--quiet")
-	runGit(t, dir, "config", "user.email", "test@example.com")
-	runGit(t, dir, "config", "user.name", "Test")
-	runGit(t, dir, "config", "commit.gpgsign", "false")
-	runGit(t, dir, "add", "-A")
-	runGit(t, dir, "commit", "-m", "fixture", "--quiet")
-}
-
-func runGit(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
-	}
-}
-
-func writeDir(t *testing.T, path string) {
-	t.Helper()
-	if err := os.MkdirAll(path, 0o755); err != nil {
-		t.Fatalf("mkdir %q: %v", path, err)
-	}
-}
-
-func writeFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir %q: %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write %q: %v", path, err)
-	}
 }
 
 func assertFileExists(t *testing.T, path string) {

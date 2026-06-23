@@ -68,7 +68,6 @@ type RunConfig struct {
 	Repo           string
 	BaseBranch     string
 	BranchPrefix   string
-	Filter         []string
 }
 
 // PRCreated records a successfully created pull request.
@@ -117,9 +116,6 @@ func (s *RunSummary) Error() error {
 // request per changed package after full sync, Manifest regeneration, and QA.
 // It always attempts every package and returns an aggregate error if any fail.
 func Run(ctx context.Context, cfg RunConfig, pkgs []discovery.Package, out io.Writer) (*RunSummary, error) {
-	if err := validateRunConfig(cfg); err != nil {
-		return nil, err
-	}
 	if out == nil {
 		out = io.Discard
 	}
@@ -140,34 +136,6 @@ func Run(ctx context.Context, cfg RunConfig, pkgs []discovery.Package, out io.Wr
 	return summary, summary.Error()
 }
 
-func validateRunConfig(cfg RunConfig) error {
-	if cfg.SourceResolver == nil {
-		return fmt.Errorf("source resolver is required")
-	}
-	if cfg.Git == nil {
-		return fmt.Errorf("git driver is required")
-	}
-	if cfg.PRClient == nil {
-		return fmt.Errorf("PR client is required")
-	}
-	if cfg.DirSyncer == nil {
-		return fmt.Errorf("directory syncer is required")
-	}
-	if cfg.CommandRunner == nil {
-		return fmt.Errorf("command runner is required")
-	}
-	if cfg.RootDir == "" {
-		return fmt.Errorf("root directory is required")
-	}
-	if cfg.Owner == "" || cfg.Repo == "" {
-		return fmt.Errorf("owner and repository are required")
-	}
-	if cfg.BaseBranch == "" {
-		return fmt.Errorf("base branch is required")
-	}
-	return nil
-}
-
 func sortPackages(pkgs []discovery.Package) []discovery.Package {
 	sorted := make([]discovery.Package, len(pkgs))
 	copy(sorted, pkgs)
@@ -177,38 +145,6 @@ func sortPackages(pkgs []discovery.Package) []discovery.Package {
 
 func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, out io.Writer, summary *RunSummary) (rerr error) {
 	fmt.Fprintf(out, "Checking %s\n", pkg.ID)
-
-	// The cleanup invariant is required: every path must leave the repository
-	// on the base branch with a clean worktree. We reset first to discard any
-	// leftover state, then checkout base at the end. If cleanup itself fails,
-	// the failure is recorded and returned so the aggregate run fails rather
-	// than continuing with a contaminated worktree.
-	cleanup := func() {
-		var errs []error
-		if err := cfg.Git.ResetHard(cfg.RootDir); err != nil {
-			errs = append(errs, fmt.Errorf("reset: %w", err))
-		}
-		if err := cfg.Git.Checkout(cfg.RootDir, cfg.BaseBranch); err != nil {
-			errs = append(errs, fmt.Errorf("checkout: %w", err))
-		}
-		if len(errs) > 0 {
-			err := errors.Join(errs...)
-			fmt.Fprintf(out, "Cleanup failed for %s: %v\n", pkg.ID, err)
-			rerr = recordFailure(summary, pkg.ID, "cleanup", err)
-		}
-	}
-	defer cleanup()
-
-	if err := cfg.Git.Checkout(cfg.RootDir, cfg.BaseBranch); err != nil {
-		return recordFailure(summary, pkg.ID, "git-checkout", err)
-	}
-	if err := cfg.Git.ResetHard(cfg.RootDir); err != nil {
-		return recordFailure(summary, pkg.ID, "git-reset", err)
-	}
-
-	if len(cfg.Filter) > 0 && !contains(cfg.Filter, pkg.ID) {
-		return nil
-	}
 
 	src, err := cfg.SourceResolver.Resolve(ctx, pkg.ID)
 	if err != nil {
@@ -234,6 +170,32 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 		fmt.Fprintf(out, "  %s: update branch %s already exists; skipping duplicate\n", pkg.ID, branch)
 		summary.AlreadyCovered = append(summary.AlreadyCovered, pkg.ID)
 		return nil
+	}
+
+	// Mutation begins here. Register the cleanup guard before the first
+	// worktree-mutating operation so that even a preparatory checkout/reset
+	// failure restores the base branch and a clean worktree.
+	cleanup := func() {
+		var errs []error
+		if err := cfg.Git.ResetHard(cfg.RootDir); err != nil {
+			errs = append(errs, fmt.Errorf("reset: %w", err))
+		}
+		if err := cfg.Git.Checkout(cfg.RootDir, cfg.BaseBranch); err != nil {
+			errs = append(errs, fmt.Errorf("checkout: %w", err))
+		}
+		if len(errs) > 0 {
+			err := errors.Join(errs...)
+			fmt.Fprintf(out, "Cleanup failed for %s: %v\n", pkg.ID, err)
+			rerr = recordFailure(summary, pkg.ID, "cleanup", err)
+		}
+	}
+	defer cleanup()
+
+	if err := cfg.Git.Checkout(cfg.RootDir, cfg.BaseBranch); err != nil {
+		return recordFailure(summary, pkg.ID, "git-checkout", err)
+	}
+	if err := cfg.Git.ResetHard(cfg.RootDir); err != nil {
+		return recordFailure(summary, pkg.ID, "git-reset", err)
 	}
 
 	if err := cfg.Git.CreateBranch(cfg.RootDir, branch, cfg.BaseBranch); err != nil {
@@ -335,15 +297,6 @@ func recordSkip(summary *RunSummary, skipped *source.SkippedError) {
 func recordFailure(summary *RunSummary, pkg, phase string, err error) error {
 	summary.Failures = append(summary.Failures, Failure{Package: pkg, Phase: phase, Err: err})
 	return err
-}
-
-func contains(list []string, item string) bool {
-	for _, s := range list {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }
 
 func branchName(prefix string, pkg discovery.Package, sha string) string {

@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/s3-odara/gentoo-overlay/internal/config"
+	"github.com/s3-odara/gentoo-overlay/internal/git"
 )
 
 // Cloner obtains a local clone of a source overlay at the requested ref.
@@ -54,7 +54,7 @@ func (e *SkippedError) Error() string {
 	return fmt.Sprintf("package %q skipped: %s", e.Package, e.Reason)
 }
 
-// Manager initializes and queries source overlays for package lookup.
+// Manager queries source overlays for package lookup.
 type Manager struct {
 	cfg    *config.Config
 	cloner Cloner
@@ -73,21 +73,11 @@ func NewManager(cfg *config.Config, cloner Cloner, baseDir string) *Manager {
 	}
 }
 
-// Initialize eagerly clones every configured source at its default ref so that
-// subsequent resolution does not hit the network.
-func (m *Manager) Initialize(ctx context.Context) error {
-	for _, s := range m.cfg.Sources {
-		if _, err := m.dirFor(ctx, s, s.Ref); err != nil {
-			return fmt.Errorf("initialize source %q: %w", s.Name, err)
-		}
-	}
-	return nil
-}
-
 // Resolve selects the source overlay and ref for pkg, verifies the package path
-// exists at the effective ref, and returns the resolved commit SHA. If the
-// package is excluded or not present in any configured source, a *SkippedError
-// is returned so callers can distinguish skipped packages from real failures.
+// exists at the effective ref, and returns the resolved commit SHA. Sources are
+// cloned lazily on first use. If the package is excluded or not present in any
+// configured source, a *SkippedError is returned so callers can distinguish
+// skipped packages from real failures.
 func (m *Manager) Resolve(ctx context.Context, pkg string) (ResolvedSource, error) {
 	if m.cfg.IsExcluded(pkg) {
 		return ResolvedSource{}, &SkippedError{Package: pkg, Reason: "excluded"}
@@ -127,7 +117,7 @@ func (m *Manager) Resolve(ctx context.Context, pkg string) (ResolvedSource, erro
 		return ResolvedSource{}, &SkippedError{Package: pkg, Reason: fmt.Sprintf("not found in %s", source.Name)}
 	}
 
-	sha, err := resolveHead(dir)
+	sha, err := git.ResolveHead(dir)
 	if err != nil {
 		return ResolvedSource{}, fmt.Errorf("resolve HEAD for %s: %w", source.Name, err)
 	}
@@ -179,67 +169,4 @@ func packageExists(dir, category, pkg string) bool {
 		return false
 	}
 	return info.IsDir()
-}
-
-func resolveHead(dir string) (string, error) {
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--short=12", "HEAD").CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("resolve HEAD: %w\n%s", err, strings.TrimSpace(string(out)))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// copyDir recursively copies src to dst, preserving symlinks. It is intended
-// for test cloners that materialize fixture repositories.
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-
-		if d.Type()&os.ModeSymlink != 0 {
-			linkTarget, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(linkTarget, target)
-		}
-
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		return copyFile(path, target, info.Mode())
-	})
-}
-
-func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return os.Chmod(dst, mode)
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -9,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/s3-odara/gentoo-overlay/internal/config"
@@ -22,11 +20,6 @@ import (
 )
 
 const defaultConfig = "overlay-update-config.json"
-
-// packageIDRe matches Gentoo category/package identifiers. It mirrors the
-// validation in internal/config so the CLI can reject malformed manual filters
-// before the updater runs.
-var packageIDRe = regexp.MustCompile(`^[a-z0-9+_.-]+/[a-zA-Z0-9+_.-]+$`)
 
 func main() {
 	if err := run(context.Background(), os.Stdout, os.Args[1:], os.Getenv); err != nil {
@@ -72,11 +65,6 @@ func run(ctx context.Context, out io.Writer, args []string, getenv func(string) 
 
 	baseBranch := resolveBaseBranch(baseBranchFlag, getenv)
 
-	filter, err := parsePackageFilter(getenv("GENTOO_OVERLAY_PACKAGES"))
-	if err != nil {
-		return err
-	}
-
 	pkgs, err := discovery.DiscoverPackages(rootAbs)
 	if err != nil {
 		return err
@@ -92,9 +80,6 @@ func run(ctx context.Context, out io.Writer, args []string, getenv func(string) 
 	defer os.RemoveAll(srcBase)
 
 	srcMgr := source.NewManager(cfg, &source.GitCloner{}, srcBase)
-	if err := srcMgr.Initialize(ctx); err != nil {
-		return fmt.Errorf("initialize source overlays: %w", err)
-	}
 
 	runCfg := updater.RunConfig{
 		SourceResolver: srcMgr,
@@ -107,7 +92,6 @@ func run(ctx context.Context, out io.Writer, args []string, getenv func(string) 
 		Repo:           repo,
 		BaseBranch:     baseBranch,
 		BranchPrefix:   cfg.BranchPrefix,
-		Filter:         filter,
 	}
 
 	summary, err := updater.Run(ctx, runCfg, pkgs, out)
@@ -164,38 +148,10 @@ func splitRepository(value string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
-func parsePackageFilter(value string) ([]string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil, nil
-	}
-
-	parts := strings.Split(value, ",")
-	filter := make([]string, 0, len(parts))
-	seen := make(map[string]bool)
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if !packageIDRe.MatchString(p) {
-			return nil, fmt.Errorf("invalid package filter %q (expected category/package)", p)
-		}
-		if seen[p] {
-			continue
-		}
-		seen[p] = true
-		filter = append(filter, p)
-	}
-	return filter, nil
-}
-
 // writeSummary appends the run summary to the GitHub Actions step summary file
 // when available. updater.Run already prints the same summary to out, so stdout
 // is not duplicated when the env variable is unset.
 func writeSummary(summary *updater.RunSummary, path string) error {
-	var buf bytes.Buffer
-	updater.PrintSummary(&buf, summary)
 	if path == "" {
 		return nil
 	}
@@ -203,12 +159,8 @@ func writeSummary(summary *updater.RunSummary, path string) error {
 	if err != nil {
 		return err
 	}
-	_, werr := f.Write(buf.Bytes())
-	cerr := f.Close()
-	if werr != nil {
-		return werr
-	}
-	return cerr
+	updater.PrintSummary(f, summary)
+	return f.Close()
 }
 
 // fsSyncer adapts overlay.SyncRepo to updater.DirSyncer.

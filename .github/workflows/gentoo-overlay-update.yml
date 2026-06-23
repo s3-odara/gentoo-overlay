@@ -5,13 +5,8 @@ on:
   schedule:
     - cron: '0 6 * * *'
 
-  # Allow maintainers to rerun all packages or a comma-separated subset.
+  # Allow maintainers to trigger a run manually.
   workflow_dispatch:
-    inputs:
-      packages:
-        description: 'Comma-separated category/package values to process (optional)'
-        required: false
-        default: ''
 
 permissions:
   contents: write
@@ -65,5 +60,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
-          GENTOO_OVERLAY_PACKAGES: ${{ inputs.packages }}
         run: go run ./cmd/gentoo-overlay-updater -root .

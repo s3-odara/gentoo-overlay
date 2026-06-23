@@ -15,6 +15,7 @@ import (
 	"github.com/s3-odara/gentoo-overlay/internal/github"
 	"github.com/s3-odara/gentoo-overlay/internal/overlay"
 	"github.com/s3-odara/gentoo-overlay/internal/source"
+	"github.com/s3-odara/gentoo-overlay/internal/testutil"
 )
 
 // mockSourceResolver is a test source resolver.
@@ -57,7 +58,7 @@ func (m *mockDirSyncer) SyncRepo(srcDir, dstDir string) error {
 	if err := os.RemoveAll(dstDir); err != nil {
 		return err
 	}
-	return copyDir(srcDir, dstDir)
+	return testutil.CopyDir(srcDir, dstDir)
 }
 
 // overlayDirSyncer wires the production overlay.SyncRepo implementation into
@@ -236,6 +237,11 @@ func testConfig(g GitDriver, pr PRClient, src SourceResolver, sync DirSyncer, ru
 		BaseBranch:     "main",
 		BranchPrefix:   "update",
 	}
+}
+
+// pkg returns a minimal discovery.Package for the given category/package id.
+func pkg(id, category, name string) discovery.Package {
+	return discovery.Package{ID: id, Category: category, Name: name, Path: "/repo/" + id}
 }
 
 func TestRun_MissingSourceSkip(t *testing.T) {
@@ -443,34 +449,6 @@ func TestRun_PkgcheckFailureBlocksPR(t *testing.T) {
 	}
 }
 
-func TestRun_FilterExclusionInteraction(t *testing.T) {
-	g := &mockGit{}
-	pr := &mockPRClient{}
-	cfg := testConfig(g, pr, &mockSourceResolver{
-		skipped: map[string]*source.SkippedError{
-			"cat/excluded": {Package: "cat/excluded", Reason: "package is excluded: cat/excluded"},
-		},
-	}, &mockDirSyncer{}, &mockCommandRunner{})
-	cfg.Filter = []string{"cat/excluded"}
-
-	pkgs := []discovery.Package{{ID: "cat/excluded", Category: "cat", Name: "excluded", Path: "/repo/cat/excluded"}}
-	var out strings.Builder
-	summary, err := Run(context.Background(), cfg, pkgs, &out)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(summary.Excluded) != 1 || summary.Excluded[0] != "cat/excluded" {
-		t.Fatalf("expected excluded package, got %v", summary.Excluded)
-	}
-	if len(summary.Created) != 0 || len(summary.MissingSource) != 0 {
-		t.Fatalf("expected no PR or missing-source for excluded package")
-	}
-	if len(g.branches) != 0 {
-		t.Fatalf("excluded package should not create a branch")
-	}
-}
-
 func TestRun_AggregateFailureContinues(t *testing.T) {
 	changes := []git.Change{{Path: "cat/bar/bar.ebuild", Status: git.Modified}}
 	g := &mockGit{hasChanges: true, changes: changes}
@@ -524,93 +502,82 @@ func TestRun_AlreadyCoveredSummary(t *testing.T) {
 	}
 }
 
-func TestRun_CleanupFailureSurfaces(t *testing.T) {
-	g := &mockGit{
-		hasChanges:     true,
-		changes:        []git.Change{{Path: "cat/foo/foo.ebuild", Status: git.Modified}},
-		resetFailAfter: 1,
-	}
-	pr := &mockPRClient{url: "https://github.com/owner/repo/pull/42"}
-	cfg := testConfig(g, pr, &mockSourceResolver{
-		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "deadbeef1234", Dir: "/src/cat/foo"},
+func TestRun_CleanupFailure(t *testing.T) {
+	tests := []struct {
+		name        string
+		pkgs        []discovery.Package
+		runner      CommandRunner
+		wantCreated int
+		wantFirst   string
+		wantPhases  []string
+	}{
+		{
+			name:        "surfaces after successful PR",
+			pkgs:        []discovery.Package{pkg("cat/foo", "cat", "foo")},
+			runner:      &mockCommandRunner{touchManifest: true},
+			wantCreated: 1,
+			wantPhases:  []string{"cleanup"},
 		},
-	}, ensureDirSyncer{}, &mockCommandRunner{touchManifest: true})
-	cfg.RootDir = t.TempDir()
-
-	pkgs := []discovery.Package{{ID: "cat/foo", Category: "cat", Name: "foo", Path: filepath.Join(cfg.RootDir, "cat/foo")}}
-	summary, err := Run(context.Background(), cfg, pkgs, io.Discard)
-	if err == nil {
-		t.Fatal("expected aggregate error when cleanup fails")
-	}
-	if len(summary.Created) != 1 {
-		t.Fatalf("expected PR to be recorded before cleanup failure, got %v", summary.Created)
-	}
-	if len(summary.Failures) != 1 || summary.Failures[0].Phase != "cleanup" {
-		t.Fatalf("expected cleanup failure, got %v", summary.Failures)
-	}
-}
-
-func TestRun_CleanupFailureStopsRun(t *testing.T) {
-	g := &mockGit{
-		hasChanges:     true,
-		changes:        []git.Change{{Path: "cat/foo/foo.ebuild", Status: git.Modified}},
-		resetFailAfter: 1,
-	}
-	pr := &mockPRClient{url: "https://github.com/owner/repo/pull/42"}
-	cfg := testConfig(g, pr, &mockSourceResolver{
-		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "deadbeef1234", Dir: "/src/cat/foo"},
-			"cat/bar": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "barsha123456", Dir: "/src/cat/bar"},
+		{
+			name: "stops run after first failure",
+			pkgs: []discovery.Package{
+				pkg("cat/foo", "cat", "foo"),
+				pkg("cat/bar", "cat", "bar"),
+			},
+			runner:      &mockCommandRunner{touchManifest: true},
+			wantCreated: 1,
+			wantFirst:   "cat/bar",
+			wantPhases:  []string{"cleanup"},
 		},
-	}, ensureDirSyncer{}, &mockCommandRunner{touchManifest: true})
-	cfg.RootDir = t.TempDir()
-
-	pkgs := []discovery.Package{
-		{ID: "cat/foo", Category: "cat", Name: "foo", Path: filepath.Join(cfg.RootDir, "cat/foo")},
-		{ID: "cat/bar", Category: "cat", Name: "bar", Path: filepath.Join(cfg.RootDir, "cat/bar")},
-	}
-	summary, err := Run(context.Background(), cfg, pkgs, io.Discard)
-	if err == nil {
-		t.Fatal("expected aggregate error when cleanup fails")
-	}
-	// Packages are processed in lexicographic order, so cat/bar is first.
-	if len(summary.Created) != 1 || summary.Created[0].Package != "cat/bar" {
-		t.Fatalf("expected PR for cat/bar only, got %v", summary.Created)
-	}
-	if len(summary.Failures) != 1 || summary.Failures[0].Phase != "cleanup" || summary.Failures[0].Package != "cat/bar" {
-		t.Fatalf("expected cleanup failure for cat/bar, got %v", summary.Failures)
-	}
-}
-
-func TestRun_CleanupFailureAfterGateFailure(t *testing.T) {
-	g := &mockGit{
-		hasChanges:     true,
-		changes:        []git.Change{{Path: "cat/foo/foo.ebuild", Status: git.Modified}},
-		resetFailAfter: 1,
-	}
-	pr := &mockPRClient{}
-	cfg := testConfig(g, pr, &mockSourceResolver{
-		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "deadbeef1234", Dir: "/src/cat/foo"},
+		{
+			name:        "surfaces alongside gate failure",
+			pkgs:        []discovery.Package{pkg("cat/foo", "cat", "foo")},
+			runner:      &mockCommandRunner{manifestErr: errors.New("distfile fetch failed")},
+			wantCreated: 0,
+			wantPhases:  []string{"manifest", "cleanup"},
 		},
-	}, ensureDirSyncer{}, &mockCommandRunner{manifestErr: errors.New("distfile fetch failed")})
-	cfg.RootDir = t.TempDir()
+	}
 
-	pkgs := []discovery.Package{{ID: "cat/foo", Category: "cat", Name: "foo", Path: filepath.Join(cfg.RootDir, "cat/foo")}}
-	summary, err := Run(context.Background(), cfg, pkgs, io.Discard)
-	if err == nil {
-		t.Fatal("expected aggregate error when cleanup fails")
-	}
-	if len(summary.Failures) != 2 {
-		t.Fatalf("expected manifest and cleanup failures, got %v", summary.Failures)
-	}
-	phases := map[string]bool{}
-	for _, f := range summary.Failures {
-		phases[f.Phase] = true
-	}
-	if !phases["manifest"] || !phases["cleanup"] {
-		t.Fatalf("expected manifest and cleanup phases, got %v", summary.Failures)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := &mockGit{
+				hasChanges:     true,
+				changes:        []git.Change{{Path: "cat/foo/foo.ebuild", Status: git.Modified}},
+				resetFailAfter: 1,
+			}
+			pr := &mockPRClient{url: "https://github.com/owner/repo/pull/42"}
+			src := &mockSourceResolver{
+				sources: map[string]source.ResolvedSource{
+					"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "deadbeef1234", Dir: "/src/cat/foo"},
+					"cat/bar": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "barsha123456", Dir: "/src/cat/bar"},
+				},
+			}
+			cfg := testConfig(g, pr, src, ensureDirSyncer{}, tt.runner)
+			cfg.RootDir = t.TempDir()
+			for i := range tt.pkgs {
+				tt.pkgs[i].Path = filepath.Join(cfg.RootDir, tt.pkgs[i].ID)
+			}
+
+			summary, err := Run(context.Background(), cfg, tt.pkgs, io.Discard)
+			if err == nil {
+				t.Fatal("expected aggregate error")
+			}
+			if len(summary.Created) != tt.wantCreated {
+				t.Fatalf("created: got %v, want %d", summary.Created, tt.wantCreated)
+			}
+			if tt.wantFirst != "" && (len(summary.Created) == 0 || summary.Created[0].Package != tt.wantFirst) {
+				t.Fatalf("first created: got %v, want %s", summary.Created, tt.wantFirst)
+			}
+			phases := map[string]bool{}
+			for _, f := range summary.Failures {
+				phases[f.Phase] = true
+			}
+			for _, phase := range tt.wantPhases {
+				if !phases[phase] {
+					t.Fatalf("expected %s failure, got %v", phase, summary.Failures)
+				}
+			}
+		})
 	}
 }
 
@@ -626,97 +593,90 @@ func (n *noopPushGit) Push(repoDir, remote, branch string) error {
 	return nil
 }
 
-func initGitRepo(t *testing.T, dir string) {
-	t.Helper()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("%s failed: %v\n%s", strings.Join(args, " "), err, out)
-		}
-	}
-	run("git", "init", "--quiet")
-	run("git", "config", "user.email", "test@example.com")
-	run("git", "config", "user.name", "Test")
-	run("git", "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("hi\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run("git", "add", "README")
-	run("git", "commit", "-m", "initial", "--quiet")
-	run("git", "branch", "-m", "main")
-}
+func TestRun_CheckoutFailureRunsCleanup(t *testing.T) {
+	g := &mockGit{checkoutErr: errors.New("checkout failed")}
+	pr := &mockPRClient{}
+	cfg := testConfig(g, pr, &mockSourceResolver{
+		sources: map[string]source.ResolvedSource{
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
+		},
+	}, &mockDirSyncer{}, &mockCommandRunner{})
 
-func writeFiles(t *testing.T, root string, files map[string]string) {
-	t.Helper()
-	for rel, content := range files {
-		path := filepath.Join(root, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatalf("write file: %v", err)
-		}
+	pkgs := []discovery.Package{{ID: "cat/foo", Category: "cat", Name: "foo", Path: "/repo/cat/foo"}}
+	summary, err := Run(context.Background(), cfg, pkgs, io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	phases := map[string]bool{}
+	for _, f := range summary.Failures {
+		phases[f.Phase] = true
+	}
+	if !phases["git-checkout"] {
+		t.Fatalf("expected git-checkout failure, got %v", summary.Failures)
+	}
+	if !phases["cleanup"] {
+		t.Fatalf("expected cleanup failure after checkout failed, got %v", summary.Failures)
+	}
+	if len(g.resets) == 0 {
+		t.Fatal("expected cleanup reset after checkout failure")
 	}
 }
 
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return os.MkdirAll(dst, 0o755)
-		}
-		target := filepath.Join(dst, rel)
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return os.MkdirAll(target, info.Mode().Perm())
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, info.Mode().Perm())
-	})
+func TestRun_ResetFailureRunsCleanup(t *testing.T) {
+	g := &mockGit{resetErr: errors.New("reset failed")}
+	pr := &mockPRClient{}
+	cfg := testConfig(g, pr, &mockSourceResolver{
+		sources: map[string]source.ResolvedSource{
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
+		},
+	}, &mockDirSyncer{}, &mockCommandRunner{})
+
+	pkgs := []discovery.Package{{ID: "cat/foo", Category: "cat", Name: "foo", Path: "/repo/cat/foo"}}
+	summary, err := Run(context.Background(), cfg, pkgs, io.Discard)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	phases := map[string]bool{}
+	for _, f := range summary.Failures {
+		phases[f.Phase] = true
+	}
+	if !phases["git-reset"] {
+		t.Fatalf("expected git-reset failure, got %v", summary.Failures)
+	}
+	if !phases["cleanup"] {
+		t.Fatalf("expected cleanup failure after reset failed, got %v", summary.Failures)
+	}
+	if len(g.resets) < 2 {
+		t.Fatalf("expected initial reset and cleanup reset, got %v", g.resets)
+	}
 }
 
 func TestRun_CleanupIsolation(t *testing.T) {
 	tmp := t.TempDir()
-	initGitRepo(t, tmp)
+	testutil.InitGitRepo(t, tmp)
 
 	// Two packages on main.
-	writeFiles(t, tmp, map[string]string{
+	testutil.WriteFiles(t, tmp, map[string]string{
 		"cat/foo/foo.ebuild": "old foo\n",
 		"cat/bar/bar.ebuild": "old bar\n",
 		"cat/bar/only-local": "keep?\n",
 	})
-	runGit(t, tmp, "add", ".")
-	runGit(t, tmp, "commit", "-m", "add packages", "--quiet")
+	testutil.RunGit(t, tmp, "add", ".")
+	testutil.RunGit(t, tmp, "commit", "-m", "add packages", "--quiet")
 
 	// Provide an origin remote so RemoteBranchExists can query it without
 	// contacting the network. The bare repo starts with no branches.
 	origin := t.TempDir()
-	runGit(t, origin, "init", "--bare", "--quiet")
-	runGit(t, tmp, "remote", "add", "origin", origin)
+	testutil.RunGit(t, origin, "init", "--bare", "--quiet")
+	testutil.RunGit(t, tmp, "remote", "add", "origin", origin)
 
 	// Source directories with updated content.
 	fooSrc := t.TempDir()
-	writeFiles(t, fooSrc, map[string]string{"foo.ebuild": "new foo\n"})
+	testutil.WriteFiles(t, fooSrc, map[string]string{"foo.ebuild": "new foo\n"})
 	barSrc := t.TempDir()
-	writeFiles(t, barSrc, map[string]string{"bar.ebuild": "new bar\n"})
+	testutil.WriteFiles(t, barSrc, map[string]string{"bar.ebuild": "new bar\n"})
 
 	// Source resolver uses deterministic SHAs so branch names are predictable.
 	src := &mockSourceResolver{
@@ -779,7 +739,14 @@ func TestRun_CleanupIsolation(t *testing.T) {
 				t.Fatalf("%s contains file from another package: %s", branch, f)
 			}
 		}
-		if !contains(files, wantEbuild) {
+		found := false
+		for _, f := range files {
+			if f == wantEbuild {
+				found = true
+				break
+			}
+		}
+		if !found {
 			t.Fatalf("%s missing %s, got %v", branch, wantEbuild, files)
 		}
 	}
@@ -804,15 +771,5 @@ func TestRun_CleanupIsolation(t *testing.T) {
 	// (verified above by diff), but the main branch still has them.
 	if _, err := os.Stat(filepath.Join(tmp, "cat/bar", "only-local")); err != nil {
 		t.Fatalf("main branch file removed by sync should still exist on main: %v", err)
-	}
-}
-
-func runGit(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }

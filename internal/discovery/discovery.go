@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 )
 
 // repoDirs are top-level directories that belong to the repository plumbing
@@ -28,8 +27,7 @@ type Package struct {
 // DiscoverPackages scans rootDir for Gentoo packages laid out as
 // <category>/<package>. A directory is treated as a package candidate only when
 // it directly contains at least one *.ebuild file. Non-package repository
-// directories are ignored and results are returned in deterministic
-// lexicographic order by package ID.
+// directories are ignored.
 func DiscoverPackages(rootDir string) ([]Package, error) {
 	entries, err := os.ReadDir(rootDir)
 	if err != nil {
@@ -69,7 +67,6 @@ func DiscoverPackages(rootDir string) ([]Package, error) {
 		}
 	}
 
-	sort.Slice(pkgs, func(i, j int) bool { return pkgs[i].ID < pkgs[j].ID })
 	return pkgs, nil
 }
 

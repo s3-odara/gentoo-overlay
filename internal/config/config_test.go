@@ -75,126 +75,91 @@ func TestLoadReader_TrailingData(t *testing.T) {
 	}
 }
 
-func TestValidate_DuplicateSourceNames(t *testing.T) {
-	cfg := Config{
-		Sources: []Source{
-			{Name: "guru", URL: "https://a.git", Ref: "master"},
-			{Name: "guru", URL: "https://b.git", Ref: "main"},
+func TestValidate(t *testing.T) {
+	baseSource := Source{Name: "guru", URL: "https://a.git", Ref: "master"}
+
+	empty := ""
+	missing := "missing"
+	invalidPkgID := "not-a-package"
+	validPkgID := "gui-apps/fuzzel"
+
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{
+			name: "valid config",
+			cfg:  Config{Sources: []Source{baseSource}, BranchPrefix: "update"},
 		},
-		BranchPrefix: "update",
+		{
+			name:    "duplicate source names",
+			cfg:     Config{Sources: []Source{baseSource, {Name: "guru", URL: "https://b.git", Ref: "main"}}, BranchPrefix: "update"},
+			wantErr: "duplicate source name",
+		},
+		{
+			name:    "missing source name",
+			cfg:     Config{Sources: []Source{{Name: "", URL: "https://a.git", Ref: "master"}}, BranchPrefix: "update"},
+			wantErr: "name is required",
+		},
+		{
+			name:    "missing source url",
+			cfg:     Config{Sources: []Source{{Name: "guru", URL: "", Ref: "master"}}, BranchPrefix: "update"},
+			wantErr: "url is required",
+		},
+		{
+			name:    "missing source ref",
+			cfg:     Config{Sources: []Source{{Name: "guru", URL: "https://a.git", Ref: ""}}, BranchPrefix: "update"},
+			wantErr: "ref is required",
+		},
+		{
+			name:    "missing branchPrefix",
+			cfg:     Config{Sources: []Source{baseSource}, BranchPrefix: ""},
+			wantErr: "branchPrefix is required",
+		},
+		{
+			name:    "invalid exclusion package id",
+			cfg:     Config{Sources: []Source{baseSource}, BranchPrefix: "update", Exclusions: []string{invalidPkgID}},
+			wantErr: "invalid exclusion",
+		},
+		{
+			name:    "invalid override package id",
+			cfg:     Config{Sources: []Source{baseSource}, BranchPrefix: "update", Overrides: map[string]Override{"bad": {}}},
+			wantErr: "invalid override",
+		},
+		{
+			name:    "empty override source",
+			cfg:     Config{Sources: []Source{baseSource}, BranchPrefix: "update", Overrides: map[string]Override{validPkgID: {Source: &empty}}},
+			wantErr: "source must not be empty",
+		},
+		{
+			name:    "empty override ref",
+			cfg:     Config{Sources: []Source{baseSource}, BranchPrefix: "update", Overrides: map[string]Override{validPkgID: {Ref: &empty}}},
+			wantErr: "ref must not be empty",
+		},
+		{
+			name:    "unknown override source",
+			cfg:     Config{Sources: []Source{baseSource}, BranchPrefix: "update", Overrides: map[string]Override{validPkgID: {Source: &missing}}},
+			wantErr: "unknown source",
+		},
 	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for duplicate source names")
-	} else if !strings.Contains(err.Error(), "duplicate source name") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
 
-func TestValidate_MissingSourceName(t *testing.T) {
-	cfg := Config{
-		Sources:      []Source{{Name: "", URL: "https://a.git", Ref: "master"}},
-		BranchPrefix: "update",
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing source name")
-	}
-}
-
-func TestValidate_MissingSourceURL(t *testing.T) {
-	cfg := Config{
-		Sources:      []Source{{Name: "guru", URL: "", Ref: "master"}},
-		BranchPrefix: "update",
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing source url")
-	}
-}
-
-func TestValidate_MissingSourceRef(t *testing.T) {
-	cfg := Config{
-		Sources:      []Source{{Name: "guru", URL: "https://a.git", Ref: ""}},
-		BranchPrefix: "update",
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing source ref")
-	}
-}
-
-func TestValidate_MissingBranchPrefix(t *testing.T) {
-	cfg := Config{
-		Sources:      []Source{{Name: "guru", URL: "https://a.git", Ref: "master"}},
-		BranchPrefix: "",
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for missing branchPrefix")
-	}
-}
-
-func TestValidate_InvalidExclusionPackageID(t *testing.T) {
-	cfg := Config{
-		Sources:      []Source{{Name: "guru", URL: "https://a.git", Ref: "master"}},
-		Exclusions:   []string{"not-a-package"},
-		BranchPrefix: "update",
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for invalid exclusion package id")
-	} else if !strings.Contains(err.Error(), "invalid exclusion") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidate_InvalidOverridePackageID(t *testing.T) {
-	cfg := Config{
-		Sources:      []Source{{Name: "guru", URL: "https://a.git", Ref: "master"}},
-		BranchPrefix: "update",
-		Overrides:    map[string]Override{"bad": {}},
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for invalid override package id")
-	} else if !strings.Contains(err.Error(), "invalid override") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidate_EmptyOverrideSource(t *testing.T) {
-	empty := ""
-	cfg := Config{
-		Sources:      []Source{{Name: "guru", URL: "https://a.git", Ref: "master"}},
-		BranchPrefix: "update",
-		Overrides:    map[string]Override{"gui-apps/fuzzel": {Source: &empty}},
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for empty override source")
-	} else if !strings.Contains(err.Error(), "source must not be empty") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidate_EmptyOverrideRef(t *testing.T) {
-	empty := ""
-	cfg := Config{
-		Sources:      []Source{{Name: "guru", URL: "https://a.git", Ref: "master"}},
-		BranchPrefix: "update",
-		Overrides:    map[string]Override{"gui-apps/fuzzel": {Ref: &empty}},
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for empty override ref")
-	} else if !strings.Contains(err.Error(), "ref must not be empty") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidate_UnknownOverrideSource(t *testing.T) {
-	name := "missing"
-	cfg := Config{
-		Sources:      []Source{{Name: "guru", URL: "https://a.git", Ref: "master"}},
-		BranchPrefix: "update",
-		Overrides:    map[string]Override{"gui-apps/fuzzel": {Source: &name}},
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for unknown override source")
-	} else if !strings.Contains(err.Error(), "unknown source") {
-		t.Fatalf("unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
 	}
 }
 
