@@ -1,0 +1,69 @@
+name: Gentoo overlay update
+
+on:
+  # Run daily. GitHub scheduled runs are best-effort and may be delayed.
+  schedule:
+    - cron: '0 6 * * *'
+
+  # Allow maintainers to rerun all packages or a comma-separated subset.
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Comma-separated category/package values to process (optional)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    container:
+      # Pinned explicit tag for reproducibility. The stage3 image is a minimal
+      # base, so the steps below bootstrap Portage, sync the Gentoo repo, and
+      # install the tools required by the updater.
+      image: gentoo/stage3:20260622
+
+    steps:
+      - name: Bootstrap Portage and install tools
+        run: |
+          set -eux
+          # Compute MAKEOPTS inside the shell so $(nproc) is expanded correctly;
+          # GitHub Actions YAML env values are not shell-expanded.
+          export MAKEOPTS="-j$(nproc)"
+          mkdir -p /etc/portage/repos.conf
+          cp /usr/share/portage/config/repos.conf /etc/portage/repos.conf/gentoo.conf
+          emaint sync --repo gentoo
+          emerge --ask=n --nospinner \
+            dev-vcs/git \
+            app-misc/ca-certificates \
+            dev-lang/go \
+            dev-util/pkgdev \
+            dev-util/pkgcheck
+
+      - uses: actions/checkout@v4
+        with:
+          # Full history avoids subtle git-origin issues for pkgcheck and for
+          # branch duplicate detection.
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # pkgcheck can complain when origin/HEAD is unset; point it at the
+          # branch that triggered this workflow.
+          git remote set-head origin "${GITHUB_REF_NAME}" || true
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Run updater
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GENTOO_OVERLAY_PACKAGES: ${{ inputs.packages }}
+        run: go run ./cmd/gentoo-overlay-updater -root .

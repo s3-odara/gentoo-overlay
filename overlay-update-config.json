@@ -1,0 +1,19 @@
+{
+  "sources": [
+    {
+      "name": "guru",
+      "url": "https://anongit.gentoo.org/git/repo/proj/guru.git",
+      "ref": "master"
+    },
+    {
+      "name": "gentoo-zh",
+      "url": "https://github.com/microcai/gentoo-zh.git",
+      "ref": "master"
+    }
+  ],
+  "exclusions": [
+    "virtual/notification-daemon"
+  ],
+  "branchPrefix": "update",
+  "overrides": {}
+}
