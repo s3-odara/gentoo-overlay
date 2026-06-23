@@ -45,9 +45,15 @@ jobs:
           fetch-depth: 0
 
       - name: Configure git
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # In container jobs the workspace is owned by the host runner user,
+          # so git refuses to operate on it ("dubious ownership"). Mark the
+          # workspace explicitly as safe before the updater runs any git command.
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           # pkgcheck can complain when origin/HEAD is unset; point it at the
           # branch that triggered this workflow.
           git remote set-head origin "${GITHUB_REF_NAME}" || true
