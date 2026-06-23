@@ -16,7 +16,10 @@ var (
 	exclusions = []string{"virtual/notification-daemon"}
 )
 
-const branchPrefix = "update"
+// BranchPrefix is the default local/remote branch name prefix for update
+// branches. It is exported so that callers (the CLI and updater tests) can
+// construct branch names without hard-coding the literal value.
+const BranchPrefix = "update"
 
 // isExcluded reports whether pkg is excluded from automatic updates.
 func isExcluded(pkg string) bool {

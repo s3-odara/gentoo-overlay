@@ -81,8 +81,14 @@ func (m *Manager) Prepare(ctx context.Context) error {
 }
 
 // Resolve selects the first source overlay (in priority order) that contains
-// pkg and returns its resolved commit SHA. It returns ErrExcluded for excluded
-// packages and ErrNotFound when no source has the package.
+// pkg and returns its resolved commit SHA at the source's configured ref. It
+// returns ErrExcluded for excluded packages and ErrNotFound when no source has
+// the package.
+//
+// The context is intentionally ignored: all network I/O (cloning) happens in
+// Prepare, and Resolve performs only local filesystem checks and a single
+// git.ResolveHead subprocess call. The parameter is kept to satisfy the
+// SourceResolver interface used by the updater.
 func (m *Manager) Resolve(_ context.Context, pkg string) (ResolvedSource, error) {
 	if isExcluded(pkg) {
 		return ResolvedSource{}, fmt.Errorf("%w: %s", ErrExcluded, pkg)

@@ -77,7 +77,7 @@ func run(ctx context.Context, out io.Writer, args []string, getenv func(string) 
 		Owner:          owner,
 		Repo:           repo,
 		BaseBranch:     baseBranch,
-		BranchPrefix:   "update",
+		BranchPrefix:   source.BranchPrefix,
 	}
 
 	_, err = updater.Run(ctx, runCfg, pkgs, out)

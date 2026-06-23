@@ -229,7 +229,10 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 
 	if err := cfg.Git.Push(cfg.RootDir, "origin", branch); err != nil {
 		msg := strings.ToLower(err.Error())
-		if strings.Contains(msg, "already exists") || strings.Contains(msg, "rejected") {
+		// Only genuine duplicate-branch or upstream-divergence signals are
+		// treated as soft skips. A generic "rejected" match would swallow real
+		// failures such as hook-declined pushes, which must be recorded.
+		if strings.Contains(msg, "already exists") || strings.Contains(msg, "non-fast-forward") {
 			fmt.Fprintf(out, "skip %s: %v\n", pkg.ID, err)
 			return nil
 		}
@@ -266,7 +269,7 @@ func recordFailure(summary *RunSummary, pkg, phase string, err error) error {
 
 func branchName(prefix string, pkg discovery.Package, sha string) string {
 	if strings.TrimSpace(prefix) == "" {
-		prefix = "update"
+		prefix = source.BranchPrefix
 	}
 	return fmt.Sprintf("%s/%s-%s/%s", prefix, pkg.Category, pkg.Name, sha)
 }

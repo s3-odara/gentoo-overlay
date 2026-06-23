@@ -221,7 +221,7 @@ func testConfig(g GitDriver, pr PRClient, src SourceResolver, sync DirSyncer, ru
 		Owner:          "owner",
 		Repo:           "repo",
 		BaseBranch:     "main",
-		BranchPrefix:   "update",
+		BranchPrefix:   source.BranchPrefix,
 	}
 }
 
@@ -316,6 +316,34 @@ func TestRun_DuplicateRemoteBranch(t *testing.T) {
 	}
 }
 
+func TestRun_PushRejectedHookDeclinedIsFailure(t *testing.T) {
+	g := &mockGit{
+		hasChanges: true,
+		pushErr:    errors.New("remote rejected: (pre-receive hook declined)"),
+	}
+	pr := &mockPRClient{}
+	cfg := testConfig(g, pr, &mockSourceResolver{
+		sources: map[string]source.ResolvedSource{
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
+		},
+	}, &mockDirSyncer{}, &mockCommandRunner{})
+
+	pkgs := []discovery.Package{{ID: "cat/foo", Category: "cat", Name: "foo", Path: "/repo/cat/foo"}}
+	summary, err := Run(context.Background(), cfg, pkgs, io.Discard)
+	if err == nil {
+		t.Fatal("expected aggregate error for hook-declined push")
+	}
+	if len(summary.Failures) != 1 {
+		t.Fatalf("expected 1 failure, got %v", summary.Failures)
+	}
+	if summary.Failures[0].Phase != "git-push" {
+		t.Fatalf("expected git-push failure, got %v", summary.Failures[0])
+	}
+	if len(summary.Created) != 0 || len(pr.calls) != 0 {
+		t.Fatalf("expected no PR for hook-declined push, got created=%v prs=%v", summary.Created, pr.calls)
+	}
+}
+
 func TestRun_CreatesPRWithChanges(t *testing.T) {
 	g := &mockGit{hasChanges: true}
 	pr := &mockPRClient{url: "https://github.com/owner/repo/pull/42"}
@@ -336,7 +364,7 @@ func TestRun_CreatesPRWithChanges(t *testing.T) {
 		t.Fatalf("expected 1 PR, got %v", summary.Created)
 	}
 	created := summary.Created[0]
-	wantBranch := "update/cat-foo/deadbeef1234"
+	wantBranch := source.BranchPrefix + "/cat-foo/deadbeef1234"
 	if created.Branch != wantBranch {
 		t.Fatalf("expected branch %s, got %s", wantBranch, created.Branch)
 	}
@@ -676,7 +704,7 @@ func TestRun_CleanupIsolation(t *testing.T) {
 		Owner:          "owner",
 		Repo:           "repo",
 		BaseBranch:     "main",
-		BranchPrefix:   "update",
+		BranchPrefix:   source.BranchPrefix,
 	}
 
 	pkgs := []discovery.Package{

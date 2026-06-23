@@ -36,7 +36,7 @@ func TestBuildPRBody_ContainsRequiredFields(t *testing.T) {
 func TestPrintSummary(t *testing.T) {
 	summary := &RunSummary{
 		Created: []PRCreated{
-			{Package: "cat/one", Branch: "update/cat-one/aaa", URL: "https://example.com/1", Source: "guru"},
+			{Package: "cat/one", Branch: source.BranchPrefix + "/cat-one/aaa", URL: "https://example.com/1", Source: "guru"},
 		},
 		Failures: []Failure{{Package: "cat/six", Phase: "manifest", Err: errors.New("boom")}},
 	}
