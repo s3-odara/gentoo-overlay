@@ -55,9 +55,25 @@ func DiscoverPackages(rootDir string) ([]Package, error) {
 			}
 			pkgName := pkgEntry.Name()
 			pkgPath := filepath.Join(catPath, pkgName)
-			if !hasEbuild(pkgPath) {
+
+			// A directory is a package candidate only when it directly
+			// contains at least one *.ebuild file. ReadDir errors are treated
+			// as "not a package" to preserve historical skip-on-error behavior.
+			pkgFiles, err := os.ReadDir(pkgPath)
+			if err != nil {
 				continue
 			}
+			hasEbuild := false
+			for _, e := range pkgFiles {
+				if !e.IsDir() && filepath.Ext(e.Name()) == ".ebuild" {
+					hasEbuild = true
+					break
+				}
+			}
+			if !hasEbuild {
+				continue
+			}
+
 			pkgs = append(pkgs, Package{
 				ID:       category + "/" + pkgName,
 				Category: category,
@@ -68,20 +84,4 @@ func DiscoverPackages(rootDir string) ([]Package, error) {
 	}
 
 	return pkgs, nil
-}
-
-func hasEbuild(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if filepath.Ext(e.Name()) == ".ebuild" {
-			return true
-		}
-	}
-	return false
 }

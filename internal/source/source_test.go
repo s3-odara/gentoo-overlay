@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/s3-odara/gentoo-overlay/internal/overlay"
 	"github.com/s3-odara/gentoo-overlay/internal/testutil"
 )
 
@@ -137,7 +138,7 @@ func (f *fakeCloner) Clone(ctx context.Context, source Source, dst string) error
 	if !ok {
 		return fmt.Errorf("no fixture for %s", source.Name)
 	}
-	return testutil.CopyDir(src, dst)
+	return overlay.SyncRepo(src, dst)
 }
 
 func makeSourceFixture(t *testing.T, root, name string, files map[string]string) string {

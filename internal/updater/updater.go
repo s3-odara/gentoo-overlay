@@ -88,14 +88,9 @@ type RunSummary struct {
 	Failures []Failure
 }
 
-// HasFailures reports whether any package failed a gate or API call.
-func (s *RunSummary) HasFailures() bool {
-	return len(s.Failures) > 0
-}
-
 // Error returns an aggregate error for all recorded failures.
 func (s *RunSummary) Error() error {
-	if !s.HasFailures() {
+	if len(s.Failures) == 0 {
 		return nil
 	}
 	errs := make([]error, len(s.Failures))
@@ -113,10 +108,13 @@ func Run(ctx context.Context, cfg RunConfig, pkgs []discovery.Package, out io.Wr
 		out = io.Discard
 	}
 
-	pkgs = sortPackages(pkgs)
+	sorted := make([]discovery.Package, len(pkgs))
+	copy(sorted, pkgs)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+
 	summary := &RunSummary{}
 
-	for _, pkg := range pkgs {
+	for _, pkg := range sorted {
 		if err := processPackage(ctx, cfg, pkg, out, summary); err != nil {
 			// processPackage records failures in the summary; an error returned
 			// here means cleanup itself failed and we should stop before the
@@ -125,15 +123,15 @@ func Run(ctx context.Context, cfg RunConfig, pkgs []discovery.Package, out io.Wr
 		}
 	}
 
-	PrintSummary(out, summary)
+	fmt.Fprintf(out, "Created %d pull request(s)\n", len(summary.Created))
+	for _, pr := range summary.Created {
+		fmt.Fprintf(out, "  %s from %s: %s (%s)\n", pr.Package, pr.Source, pr.URL, pr.Branch)
+	}
+	fmt.Fprintf(out, "%d failure(s)\n", len(summary.Failures))
+	for _, f := range summary.Failures {
+		fmt.Fprintf(out, "  %s (%s): %s\n", f.Package, f.Phase, f.Err)
+	}
 	return summary, summary.Error()
-}
-
-func sortPackages(pkgs []discovery.Package) []discovery.Package {
-	sorted := make([]discovery.Package, len(pkgs))
-	copy(sorted, pkgs)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
-	return sorted
 }
 
 func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, out io.Writer, summary *RunSummary) (rerr error) {
@@ -149,7 +147,11 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 		return nil
 	}
 
-	branch := branchName(cfg.BranchPrefix, pkg, src.SHA)
+	prefix := cfg.BranchPrefix
+	if strings.TrimSpace(prefix) == "" {
+		prefix = source.BranchPrefix
+	}
+	branch := fmt.Sprintf("%s/%s-%s/%s", prefix, pkg.Category, pkg.Name, src.SHA)
 
 	// Mutation begins here. Register the cleanup guard before the first
 	// worktree-mutating operation so that even a preparatory checkout/reset
@@ -163,18 +165,21 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 			errs = append(errs, fmt.Errorf("checkout: %w", err))
 		}
 		if len(errs) > 0 {
-			err := errors.Join(errs...)
-			fmt.Fprintf(out, "Cleanup failed for %s: %v\n", pkg.ID, err)
-			rerr = recordFailure(summary, pkg.ID, "cleanup", err)
+			cleanupErr := errors.Join(errs...)
+			fmt.Fprintf(out, "Cleanup failed for %s: %v\n", pkg.ID, cleanupErr)
+			recordFailure(summary, pkg.ID, "cleanup", cleanupErr)
+			rerr = cleanupErr
 		}
 	}
 	defer cleanup()
 
 	if err := cfg.Git.Checkout(cfg.RootDir, cfg.BaseBranch); err != nil {
-		return recordFailure(summary, pkg.ID, "git-checkout", err)
+		recordFailure(summary, pkg.ID, "git-checkout", err)
+		return err
 	}
 	if err := cfg.Git.ResetHard(cfg.RootDir); err != nil {
-		return recordFailure(summary, pkg.ID, "git-reset", err)
+		recordFailure(summary, pkg.ID, "git-reset", err)
+		return err
 	}
 
 	if err := cfg.Git.CreateBranch(cfg.RootDir, branch, cfg.BaseBranch); err != nil {
@@ -222,7 +227,7 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 
 	fmt.Fprintf(out, "  %s: changes detected\n", pkg.ID)
 
-	if err := cfg.Git.Commit(cfg.RootDir, commitMessage(pkg, src)); err != nil {
+	if err := cfg.Git.Commit(cfg.RootDir, fmt.Sprintf("sync %s from %s", pkg.ID, src.Name)); err != nil {
 		recordFailure(summary, pkg.ID, "git-commit", err)
 		return nil
 	}
@@ -241,10 +246,10 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 	}
 
 	pr := github.PullRequest{
-		Title: prTitle(pkg, src),
+		Title: fmt.Sprintf("Update %s from %s", pkg.ID, src.Name),
 		Head:  branch,
 		Base:  cfg.BaseBranch,
-		Body:  BuildPRBody(pkg, src),
+		Body:  fmt.Sprintf("Update `%s` from the `%s` overlay.\n\n- Source: %s\n- URL: %s\n- Ref: %s\n- Commit: %s\n", pkg.ID, src.Name, src.Name, src.URL, src.Ref, src.SHA),
 	}
 	url, err := cfg.PRClient.CreatePullRequest(ctx, cfg.Owner, cfg.Repo, pr)
 	if err != nil {
@@ -262,22 +267,6 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 	return nil
 }
 
-func recordFailure(summary *RunSummary, pkg, phase string, err error) error {
+func recordFailure(summary *RunSummary, pkg, phase string, err error) {
 	summary.Failures = append(summary.Failures, Failure{Package: pkg, Phase: phase, Err: err})
-	return err
-}
-
-func branchName(prefix string, pkg discovery.Package, sha string) string {
-	if strings.TrimSpace(prefix) == "" {
-		prefix = source.BranchPrefix
-	}
-	return fmt.Sprintf("%s/%s-%s/%s", prefix, pkg.Category, pkg.Name, sha)
-}
-
-func commitMessage(pkg discovery.Package, src source.ResolvedSource) string {
-	return fmt.Sprintf("sync %s from %s", pkg.ID, src.Name)
-}
-
-func prTitle(pkg discovery.Package, src source.ResolvedSource) string {
-	return fmt.Sprintf("Update %s from %s", pkg.ID, src.Name)
 }

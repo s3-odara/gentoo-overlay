@@ -31,49 +31,6 @@ func WriteFiles(t *testing.T, root string, files map[string]string) {
 	}
 }
 
-// CopyDir recursively copies src to dst, preserving symlinks. It is intended
-// for test cloners and fixture setup.
-func CopyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return os.MkdirAll(dst, 0o755)
-		}
-		target := filepath.Join(dst, rel)
-
-		if d.Type()&os.ModeSymlink != 0 {
-			linkTarget, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(linkTarget, target)
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return os.MkdirAll(target, info.Mode().Perm())
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, info.Mode().Perm())
-	})
-}
-
 // InitGitRepo initializes a git repository in dir with a single commit on main.
 func InitGitRepo(t *testing.T, dir string) {
 	t.Helper()

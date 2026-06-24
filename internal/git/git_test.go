@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func runGit(t *testing.T, dir string, args ...string) {
+func runGitTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -21,16 +21,16 @@ func runGit(t *testing.T, dir string, args ...string) {
 func initRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	runGit(t, dir, "init", "--quiet")
-	runGit(t, dir, "config", "user.email", "test@example.com")
-	runGit(t, dir, "config", "user.name", "Test")
-	runGit(t, dir, "config", "commit.gpgsign", "false")
+	runGitTest(t, dir, "init", "--quiet")
+	runGitTest(t, dir, "config", "user.email", "test@example.com")
+	runGitTest(t, dir, "config", "user.name", "Test")
+	runGitTest(t, dir, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("hi\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, dir, "add", "README")
-	runGit(t, dir, "commit", "-m", "initial", "--quiet")
-	runGit(t, dir, "branch", "-m", "main")
+	runGitTest(t, dir, "add", "README")
+	runGitTest(t, dir, "commit", "-m", "initial", "--quiet")
+	runGitTest(t, dir, "branch", "-m", "main")
 	return dir
 }
 
@@ -57,8 +57,8 @@ func TestExecDriver_CreateBranchFromBase(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "base"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, dir, "add", "base")
-	runGit(t, dir, "commit", "-m", "add base", "--quiet")
+	runGitTest(t, dir, "add", "base")
+	runGitTest(t, dir, "commit", "-m", "add base", "--quiet")
 
 	// Switch to a feature branch and add a file.
 	if err := d.CreateBranch(dir, "feature", "main"); err != nil {
@@ -67,8 +67,8 @@ func TestExecDriver_CreateBranchFromBase(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "feature"), []byte("feature\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, dir, "add", "feature")
-	runGit(t, dir, "commit", "-m", "feature", "--quiet")
+	runGitTest(t, dir, "add", "feature")
+	runGitTest(t, dir, "commit", "-m", "feature", "--quiet")
 
 	// A new update branch created from main must not contain the feature commit.
 	if err := d.CreateBranch(dir, "update/gui-apps-fuzzel", "main"); err != nil {
@@ -206,10 +206,9 @@ func TestExecDriver_Stage_PathScoped(t *testing.T) {
 	}
 }
 
-func TestExecDriver_ResolveHead(t *testing.T) {
+func TestResolveHead(t *testing.T) {
 	dir := initRepo(t)
-	d := &ExecDriver{}
-	sha, err := d.ResolveHead(dir)
+	sha, err := ResolveHead(dir)
 	if err != nil {
 		t.Fatalf("ResolveHead failed: %v", err)
 	}

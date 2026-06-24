@@ -56,10 +56,7 @@ func (m *mockDirSyncer) SyncRepo(srcDir, dstDir string) error {
 	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
 		return nil
 	}
-	if err := os.RemoveAll(dstDir); err != nil {
-		return err
-	}
-	return testutil.CopyDir(srcDir, dstDir)
+	return overlay.SyncRepo(srcDir, dstDir)
 }
 
 // overlayDirSyncer wires the production overlay.SyncRepo implementation into
