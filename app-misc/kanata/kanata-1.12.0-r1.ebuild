@@ -40,7 +40,7 @@ CRATES="
 	colorchoice@1.0.3
 	console_error_panic_hook@0.1.7
 	core-foundation-sys@0.8.7
-	core-foundation@0.10.0
+	core-foundation@0.10.1
 	core-foundation@0.9.4
 	core-graphics-types@0.1.3
 	core-graphics-types@0.2.0
@@ -51,7 +51,6 @@ CRATES="
 	deranged@0.5.5
 	dirs-sys@0.4.1
 	dirs@5.0.1
-	either@1.13.0
 	embed-resource@2.5.0
 	encode_unicode@0.3.6
 	endian-type@0.1.2
@@ -84,14 +83,13 @@ CRATES="
 	is-wsl@0.4.0
 	is_ci@1.2.0
 	is_terminal_polyfill@1.70.1
-	itertools@0.12.1
 	itoa@1.0.11
 	jobserver@0.1.32
 	jpeg-decoder@0.3.1
 	js-sys@0.3.77
 	kanata-interception@0.3.0
 	kanata-keyberon-macros@0.2.0
-	karabiner-driverkit@0.2.0
+	karabiner-driverkit@0.3.1
 	lazy_static@1.5.0
 	libc@0.2.161
 	libredox@0.1.3
@@ -137,7 +135,7 @@ CRATES="
 	parking_lot@0.12.3
 	parking_lot_core@0.9.10
 	pathdiff@0.2.2
-	patricia_tree@0.8.0
+	patricia_tree@0.9.0
 	pin-utils@0.1.0
 	png@0.17.16
 	powerfmt@0.2.0
@@ -269,4 +267,18 @@ src_configure() {
 		$(usev cmd)
 	)
 	cargo_src_configure
+}
+
+src_test() {
+	local CARGO_SKIP_TESTS=(
+		kanata::tcp_layer_change_tests
+	)
+	cargo_src_test
+}
+
+src_install() {
+	cargo_src_install
+
+	exeinto /etc/user/init.d
+	newexe "${FILESDIR}"/kanata.initd kanata
 }
