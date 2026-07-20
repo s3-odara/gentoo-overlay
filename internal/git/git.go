@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -63,13 +64,14 @@ func (e *ExecDriver) ResetHard(repoDir string) error {
 	return runGit(repoDir, "clean", "-fd")
 }
 
-// ResolveHead returns the short (12 character) SHA of the current HEAD of the
-// repository at repoDir. It is used to fingerprint the upstream revision so the
-// updater can name PR branches deterministically and avoid duplicate proposals.
-func ResolveHead(repoDir string) (string, error) {
-	out, err := exec.Command("git", "-C", repoDir, "rev-parse", "--short=12", "HEAD").CombinedOutput()
+// ResolveTree returns the short (12 character) SHA of the tree at path in
+// HEAD. Using the package tree rather than the repository commit keeps the
+// fingerprint stable when an unrelated package changes in the same overlay.
+func ResolveTree(repoDir, path string) (string, error) {
+	object := "HEAD:" + filepath.ToSlash(path)
+	out, err := exec.Command("git", "-C", repoDir, "rev-parse", "--short=12", object).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("resolve HEAD in %q: %w\n%s", repoDir, err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("resolve tree %q in %q: %w\n%s", path, repoDir, err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
 }

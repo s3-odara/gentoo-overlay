@@ -40,8 +40,8 @@ func TestResolve_GuruPriorityWins(t *testing.T) {
 	if src.Ref != "master" {
 		t.Fatalf("expected ref master, got %q", src.Ref)
 	}
-	if src.SHA == "" {
-		t.Fatal("expected non-empty SHA")
+	if src.TreeHash == "" {
+		t.Fatal("expected non-empty package tree hash")
 	}
 	assertFileExists(t, filepath.Join(src.Dir, "fuzzel-1.0.ebuild"))
 }
@@ -147,8 +147,8 @@ func makeSourceFixture(t *testing.T, root, name string, files map[string]string)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %q: %v", dir, err)
 	}
-	// Every fixture must have at least one tracked file so git can create a
-	// commit and resolve a HEAD SHA.
+	// Every fixture must have at least one tracked file so git can create the
+	// commit from which package trees are resolved.
 	testutil.WriteFile(t, filepath.Join(dir, ".gitkeep"), "")
 	for path, content := range files {
 		testutil.WriteFile(t, filepath.Join(dir, path), content)

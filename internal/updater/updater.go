@@ -33,7 +33,7 @@ type PRClient interface {
 }
 
 // SourceResolver selects the upstream source overlay for a package and reports
-// its resolved commit SHA. The production implementation is internal/source.Manager.
+// its package tree hash. The production implementation is internal/source.Manager.
 type SourceResolver interface {
 	Resolve(ctx context.Context, pkg string) (source.ResolvedSource, error)
 }
@@ -151,7 +151,7 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 	if strings.TrimSpace(prefix) == "" {
 		prefix = source.BranchPrefix
 	}
-	branch := fmt.Sprintf("%s/%s-%s/%s", prefix, pkg.Category, pkg.Name, src.SHA)
+	branch := fmt.Sprintf("%s/%s-%s/%s", prefix, pkg.Category, pkg.Name, src.TreeHash)
 
 	// Mutation begins here. Register the cleanup guard before the first
 	// worktree-mutating operation so that even a preparatory checkout/reset
@@ -249,7 +249,7 @@ func processPackage(ctx context.Context, cfg RunConfig, pkg discovery.Package, o
 		Title: fmt.Sprintf("Update %s from %s", pkg.ID, src.Name),
 		Head:  branch,
 		Base:  cfg.BaseBranch,
-		Body:  fmt.Sprintf("Update `%s` from the `%s` overlay.\n\n- Source: %s\n- URL: %s\n- Ref: %s\n- Commit: %s\n", pkg.ID, src.Name, src.Name, src.URL, src.Ref, src.SHA),
+		Body:  fmt.Sprintf("Update `%s` from the `%s` overlay.\n\n- Source: %s\n- URL: %s\n- Ref: %s\n", pkg.ID, src.Name, src.Name, src.URL, src.Ref),
 	}
 	url, err := cfg.PRClient.CreatePullRequest(ctx, cfg.Owner, cfg.Repo, pr)
 	if err != nil {

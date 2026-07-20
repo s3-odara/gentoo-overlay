@@ -282,7 +282,7 @@ func TestRun_DuplicateRemoteBranch(t *testing.T) {
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "abc123", Dir: "/src/cat/foo"},
 		},
 	}, &mockDirSyncer{}, &mockCommandRunner{})
 
@@ -321,7 +321,7 @@ func TestRun_PushRejectedHookDeclinedIsFailure(t *testing.T) {
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "abc123", Dir: "/src/cat/foo"},
 		},
 	}, &mockDirSyncer{}, &mockCommandRunner{})
 
@@ -347,7 +347,7 @@ func TestRun_CreatesPRWithChanges(t *testing.T) {
 	runner := &mockCommandRunner{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "deadbeef1234", Dir: "/src/cat/foo"},
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "deadbeef1234", Dir: "/src/cat/foo"},
 		},
 	}, &mockDirSyncer{}, runner)
 
@@ -398,10 +398,13 @@ func TestRun_CreatesPRWithChanges(t *testing.T) {
 	if prCall.Head != wantBranch || prCall.Base != "main" {
 		t.Fatalf("unexpected PR head/base: %q/%q", prCall.Head, prCall.Base)
 	}
-	for _, want := range []string{"guru", "https://guru", "deadbeef1234"} {
+	for _, want := range []string{"guru", "https://guru", "master"} {
 		if !strings.Contains(prCall.Body, want) {
 			t.Fatalf("PR body missing %q:\n%s", want, prCall.Body)
 		}
+	}
+	if strings.Contains(prCall.Body, "Commit:") || strings.Contains(prCall.Body, "deadbeef1234") {
+		t.Fatalf("PR body should not include an overlay commit or tree hash:\n%s", prCall.Body)
 	}
 }
 
@@ -410,7 +413,7 @@ func TestRun_NoPRWhenNoDiff(t *testing.T) {
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "abc123", Dir: "/src/cat/foo"},
 		},
 	}, &mockDirSyncer{}, &mockCommandRunner{})
 
@@ -437,7 +440,7 @@ func TestRun_ManifestFailureBlocksPR(t *testing.T) {
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "abc123", Dir: "/src/cat/foo"},
 		},
 	}, &mockDirSyncer{}, &mockCommandRunner{manifestErr: errors.New("distfile fetch failed")})
 
@@ -462,7 +465,7 @@ func TestRun_PkgcheckFailureBlocksPR(t *testing.T) {
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "abc123", Dir: "/src/cat/foo"},
 		},
 	}, &mockDirSyncer{}, &mockCommandRunner{pkgcheckErr: errors.New("pkgcheck error")})
 
@@ -484,8 +487,8 @@ func TestRun_AggregateFailureContinues(t *testing.T) {
 	pr := &mockPRClient{}
 	src := &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "bad", Dir: "/src/cat/foo"},
-			"cat/bar": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "good", Dir: "/src/cat/bar"},
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "bad", Dir: "/src/cat/foo"},
+			"cat/bar": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "good", Dir: "/src/cat/bar"},
 		},
 	}
 	runner := &mockCommandRunner{manifestErrFor: map[string]error{"cat/foo": errors.New("fail foo")}}
@@ -552,8 +555,8 @@ func TestRun_CleanupFailure(t *testing.T) {
 			pr := &mockPRClient{url: "https://github.com/owner/repo/pull/42"}
 			src := &mockSourceResolver{
 				sources: map[string]source.ResolvedSource{
-					"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "deadbeef1234", Dir: "/src/cat/foo"},
-					"cat/bar": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "barsha123456", Dir: "/src/cat/bar"},
+					"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "deadbeef1234", Dir: "/src/cat/foo"},
+					"cat/bar": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "barsha123456", Dir: "/src/cat/bar"},
 				},
 			}
 			cfg := testConfig(g, pr, src, ensureDirSyncer{}, tt.runner)
@@ -602,7 +605,7 @@ func TestRun_CheckoutFailureRunsCleanup(t *testing.T) {
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "abc123", Dir: "/src/cat/foo"},
 		},
 	}, &mockDirSyncer{}, &mockCommandRunner{})
 
@@ -632,7 +635,7 @@ func TestRun_ResetFailureRunsCleanup(t *testing.T) {
 	pr := &mockPRClient{}
 	cfg := testConfig(g, pr, &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "abc123", Dir: "/src/cat/foo"},
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "abc123", Dir: "/src/cat/foo"},
 		},
 	}, &mockDirSyncer{}, &mockCommandRunner{})
 
@@ -682,11 +685,11 @@ func TestRun_CleanupIsolation(t *testing.T) {
 	barSrc := t.TempDir()
 	testutil.WriteFiles(t, barSrc, map[string]string{"bar.ebuild": "new bar\n"})
 
-	// Source resolver uses deterministic SHAs so branch names are predictable.
+	// Source resolver uses deterministic tree hashes so branch names are predictable.
 	src := &mockSourceResolver{
 		sources: map[string]source.ResolvedSource{
-			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", SHA: "foosha123456", Dir: fooSrc},
-			"cat/bar": {Name: "gentoo-zh", URL: "https://zh", Ref: "master", SHA: "barsha123456", Dir: barSrc},
+			"cat/foo": {Name: "guru", URL: "https://guru", Ref: "master", TreeHash: "foosha123456", Dir: fooSrc},
+			"cat/bar": {Name: "gentoo-zh", URL: "https://zh", Ref: "master", TreeHash: "barsha123456", Dir: barSrc},
 		},
 	}
 

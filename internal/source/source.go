@@ -41,11 +41,11 @@ func (g *GitCloner) Clone(ctx context.Context, source Source, dst string) error 
 
 // ResolvedSource describes the source overlay selected for a package.
 type ResolvedSource struct {
-	Name string
-	URL  string
-	Dir  string // package directory in the source overlay
-	Ref  string
-	SHA  string // resolved commit SHA
+	Name     string
+	URL      string
+	Dir      string // package directory in the source overlay
+	Ref      string
+	TreeHash string // short Git tree hash of the package directory
 }
 
 // Manager queries source overlays for package lookup.
@@ -81,13 +81,12 @@ func (m *Manager) Prepare(ctx context.Context) error {
 }
 
 // Resolve selects the first source overlay (in priority order) that contains
-// pkg and returns its resolved commit SHA at the source's configured ref. It
-// returns ErrExcluded for excluded packages and ErrNotFound when no source has
-// the package.
+// pkg and returns a tree hash of that package directory. It returns ErrExcluded
+// for excluded packages and ErrNotFound when no source has the package.
 //
 // The context is intentionally ignored: all network I/O (cloning) happens in
 // Prepare, and Resolve performs only local filesystem checks and a single
-// git.ResolveHead subprocess call. The parameter is kept to satisfy the
+// git.ResolveTree subprocess call. The parameter is kept to satisfy the
 // SourceResolver interface used by the updater.
 func (m *Manager) Resolve(_ context.Context, pkg string) (ResolvedSource, error) {
 	if isExcluded(pkg) {
@@ -107,16 +106,17 @@ func (m *Manager) Resolve(_ context.Context, pkg string) (ResolvedSource, error)
 		if !packageExists(dir, category, pkgName) {
 			continue
 		}
-		sha, err := git.ResolveHead(dir)
+		pkgPath := filepath.Join(category, pkgName)
+		treeHash, err := git.ResolveTree(dir, pkgPath)
 		if err != nil {
-			return ResolvedSource{}, fmt.Errorf("resolve HEAD for %s: %w", s.Name, err)
+			return ResolvedSource{}, fmt.Errorf("resolve package tree for %s: %w", s.Name, err)
 		}
 		return ResolvedSource{
-			Name: s.Name,
-			URL:  s.URL,
-			Dir:  filepath.Join(dir, category, pkgName),
-			Ref:  s.Ref,
-			SHA:  sha,
+			Name:     s.Name,
+			URL:      s.URL,
+			Dir:      filepath.Join(dir, pkgPath),
+			Ref:      s.Ref,
+			TreeHash: treeHash,
 		}, nil
 	}
 

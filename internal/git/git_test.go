@@ -206,25 +206,54 @@ func TestExecDriver_Stage_PathScoped(t *testing.T) {
 	}
 }
 
-func TestResolveHead(t *testing.T) {
+func TestResolveTree(t *testing.T) {
 	dir := initRepo(t)
-	sha, err := ResolveHead(dir)
+	pkgDir := filepath.Join(dir, "cat", "foo")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "foo.ebuild"), []byte("EAPI=8\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, dir, "add", "cat/foo/foo.ebuild")
+	runGitTest(t, dir, "commit", "-m", "add package", "--quiet")
+
+	initial, err := ResolveTree(dir, filepath.Join("cat", "foo"))
 	if err != nil {
-		t.Fatalf("ResolveHead failed: %v", err)
+		t.Fatalf("ResolveTree failed: %v", err)
 	}
-	if len(sha) != 12 {
-		t.Fatalf("expected 12-character short SHA, got %q", sha)
+	if len(initial) != 12 {
+		t.Fatalf("expected 12-character short SHA, got %q", initial)
 	}
-	for _, c := range sha {
+	for _, c := range initial {
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-			t.Fatalf("expected hex SHA, got %q", sha)
+			t.Fatalf("expected hex SHA, got %q", initial)
 		}
 	}
-	full, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").CombinedOutput()
-	if err != nil {
-		t.Fatalf("rev-parse HEAD failed: %v\n%s", err, full)
+
+	if err := os.WriteFile(filepath.Join(dir, "unrelated"), []byte("change\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.HasPrefix(strings.TrimSpace(string(full)), sha) {
-		t.Fatalf("short SHA %q is not a prefix of HEAD %q", sha, strings.TrimSpace(string(full)))
+	runGitTest(t, dir, "add", "unrelated")
+	runGitTest(t, dir, "commit", "-m", "change unrelated file", "--quiet")
+	unchanged, err := ResolveTree(dir, "cat/foo")
+	if err != nil {
+		t.Fatalf("ResolveTree after unrelated change failed: %v", err)
+	}
+	if unchanged != initial {
+		t.Fatalf("unrelated change altered package tree hash: got %q, want %q", unchanged, initial)
+	}
+
+	if err := os.WriteFile(filepath.Join(pkgDir, "foo.ebuild"), []byte("EAPI=8\nDESCRIPTION=test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, dir, "add", "cat/foo/foo.ebuild")
+	runGitTest(t, dir, "commit", "-m", "change package", "--quiet")
+	changed, err := ResolveTree(dir, "cat/foo")
+	if err != nil {
+		t.Fatalf("ResolveTree after package change failed: %v", err)
+	}
+	if changed == initial {
+		t.Fatalf("package change did not alter tree hash %q", initial)
 	}
 }
