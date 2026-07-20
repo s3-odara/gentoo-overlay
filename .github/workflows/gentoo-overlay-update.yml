@@ -16,10 +16,9 @@ jobs:
   update:
     runs-on: ubuntu-latest
     container:
-      # Pinned explicit tag for reproducibility. The stage3 image is a minimal
-      # base, so the steps below bootstrap Portage, sync the Gentoo repo, and
-      # install the tools required by the updater.
-      image: gentoo/stage3:20260622
+      # Track the current Gentoo stage3 because this updater validates against
+      # a recent repository snapshot and installs current tooling on every run.
+      image: gentoo/stage3:latest
 
     steps:
       - name: Bootstrap Portage and install tools
@@ -30,7 +29,7 @@ jobs:
           export MAKEOPTS="-j$(nproc)"
           mkdir -p /etc/portage/repos.conf
           cp /usr/share/portage/config/repos.conf /etc/portage/repos.conf/gentoo.conf
-          emaint sync --repo gentoo
+          emerge-webrsync
           emerge --ask=n --nospinner \
             dev-vcs/git \
             app-misc/ca-certificates \
