@@ -17,7 +17,7 @@ SLOT="0"
 KEYWORDS="~amd64"
 
 DEPEND="
-	app-i18n/cskk
+	app-i18n/cskk:=
 	>=app-i18n/fcitx-5.0.6:5
 	app-i18n/libskk
 	app-i18n/skk-jisyo
