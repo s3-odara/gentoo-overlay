@@ -22,7 +22,7 @@ else
 fi
 
 LICENSE="MIT"
-#gentoo-go-license lf-9999.ebuild
+#gentoo-go-license lf-42.ebuild
 LICENSE+=" Apache-2.0 BSD MIT "
 # dependency licenses
 SLOT="0"
