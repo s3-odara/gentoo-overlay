@@ -4,8 +4,14 @@
 EAPI=8
 
 declare -g -r -A ZBS_DEPENDENCIES=(
+	[pixman-0.3.0-LClMnz2VAAAs7QSCGwLimV5VUYx0JFnX5xWU6HwtMuDX.tar.gz]='https://codeberg.org/ifreund/zig-pixman/archive/v0.3.0.tar.gz'
+	[wayland-0.7.0-lQa1kuP8AQD5dW7_o-VKLVD_QbqXe7Zob78r2su7Pyex.tar.gz]='https://codeberg.org/ifreund/zig-wayland/archive/v0.7.0.tar.gz'
+	[wlroots-0.20.3-jmOlcsh0BACce9rpfvzUI4V3AalGg9GE0QQkvRFoHo1c.tar.gz]='https://codeberg.org/ifreund/zig-wlroots/archive/v0.20.3.tar.gz'
+	[xkbcommon-0.5.0-VDqIe8y3AgDU-cGL02xZplwABH3WbpTimrrgbgTgD_3g.tar.gz]='https://codeberg.org/ifreund/zig-xkbcommon/archive/v0.5.0.tar.gz'
+	[translate_c-2.0.2-Q_BUWvBNBwDnyehSiuAJmdFcMYHYGA-Jc3KiYdrV2Dqx.tar.gz]='https://codeberg.org/ziglang/translate-c/archive/cfac21f3199b2b02ce3fd7db652aa456421fe4ab.tar.gz'
+	[aro-0.0.0-JSD1QvCRNwC2O1Jkop9TO6sXb1U1vhrH8FnYK1VdEMKn.tar.gz]='https://codeberg.org/ziglang/arocc/archive/630d99ed60fe61ccabe721f1af60881f8b2adde3.tar.gz'
 )
-ZIG_SLOT="0.16"
+ZIG_SLOT="0.17"
 
 inherit zig
 
@@ -52,9 +58,7 @@ RDEPEND="${DEPEND}"
 
 DOCS=( "README.md" )
 
-PATCHES=(
-	"${FILESDIR}/${PN}-0.3.12-fix-scdoc-path.patch"
-)
+BUILD_DIR="${S}"
 
 src_unpack() {
 	if [[ "${PV}" == "0.3.9999" ]]; then
@@ -87,12 +91,4 @@ src_install() {
 
 	insinto /usr/share/river/
 	doins -r example/
-}
-
-pkg_postinst() {
-	ewarn "Starting from river 0.3.13, maintenance of the river 0.3.x branch has"
-	ewarn "been moved to https://codeberg.org/river/river-classic to prepare for"
-	ewarn "the upcoming river 0.4 release, which is a significant rework of the"
-	ewarn "compositor's architecture. If you wish to stay on 0.3.x when 0.4 is"
-	ewarn "released, mask >=gui-wm/river-0.4 using /etc/portage/package.mask."
 }
