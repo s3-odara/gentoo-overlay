@@ -7,11 +7,11 @@ DESCRIPTION="Small screenlocker for Wayland compositors"
 HOMEPAGE="https://isaacfreund.com/software/waylock/ https://codeberg.org/ifreund/waylock"
 
 declare -g -r -A ZBS_DEPENDENCIES=(
-	[wayland-0.3.0-lQa1kjPIAQDmhGYpY-zxiRzQJFHQ2VqhJkQLbKKdt5wl.tar.gz]='https://codeberg.org/ifreund/zig-wayland/archive/v0.3.0.tar.gz'
-	[xkbcommon-0.3.0-VDqIe3K9AQB2fG5ZeRcMC9i7kfrp5m2rWgLrmdNn9azr.tar.gz]='https://codeberg.org/ifreund/zig-xkbcommon/archive/v0.3.0.tar.gz'
+	[wayland-0.7.0-lQa1kuP8AQD5dW7_o-VKLVD_QbqXe7Zob78r2su7Pyex.tar.gz]='https://codeberg.org/ifreund/zig-wayland/archive/v0.7.0.tar.gz'
+	[xkbcommon-0.5.0-VDqIe8y3AgDU-cGL02xZplwABH3WbpTimrrgbgTgD_3g.tar.gz]='https://codeberg.org/ifreund/zig-xkbcommon/archive/v0.5.0.tar.gz'
 )
 
-ZIG_SLOT="0.14"
+ZIG_SLOT="0.17"
 inherit zig
 
 SRC_URI="
@@ -24,12 +24,10 @@ SRC_URI="
 LICENSE="ISC MIT"
 SLOT="0"
 KEYWORDS="~amd64 ~arm64"
-IUSE="man"
 
 BDEPEND="
 	dev-libs/wayland-protocols
 	dev-util/wayland-scanner
-	man? ( app-text/scdoc )
 "
 DEPEND="
 	dev-libs/wayland
@@ -41,8 +39,14 @@ RDEPEND="${DEPEND}"
 src_configure() {
 	local my_zbs_args=(
 		-Dpie=true
-		-Dman-pages=$(usex man true false)
+		-Dman-pages=false
 	)
 
 	zig_src_configure
+}
+
+src_install() {
+	doman "${FILESDIR}/${PN}.1"
+
+	zig_src_install
 }
